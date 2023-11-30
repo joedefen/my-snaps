@@ -109,8 +109,8 @@ class BtrfsRestore:
         cmds, todo = {}, '0'
         for idx, snap in enumerate(snaps):
             pathname = snaps[snap]
-            cmds[str(idx)] = (f'btrfs sub snap {pathname} {snap}.next; '
-                        + f'mv {snap} {snap}.prev; mv {snap}.next {snap}')
+            cmds[str(idx)] = (f'btrfs sub snap {pathname} {snap}.old; '
+                        + f'mv {snap} {snap}.new; mv {snap}.old {snap}')
         cmds[str(len(snaps))] = 'reboot now'
         self.do_command(cmds, todo, once=False)
 
