@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+""" Program to run """
+# pylint: disable=invalid-name,broad-exception-caught
+# pylint: disable=too-many-locals
+
+import sys
+import os
+import subprocess
+import re
+from types import SimpleNamespace
+from InlineMenu import Menu
+
+class BtrfsRestore:
+    """ TBD """
+    def __init__(self):
+        if os.geteuid() != 0: # Re-run the script with sudo
+            print('NOTE: restarting with "sudo"')
+            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
+        self.dry_run = False
+        self.filesystems = []
+        self.slash_mnt = self.get_slash_mnt()
+
+    def do_command(self, prompts, todo=None, precmd='', once=False, force=False):
+        """ TBD"""
+        prompts['q'] = 'QUIT'
+        while True:
+            menu = Menu(prompts, str(todo) if todo else None)
+            choice = menu.prompt()
+            if choice == 'q':
+                sys.exit(0)
+            cmd = prompts[choice].strip()
+            if not cmd.startswith('#'):
+                if not force and self.dry_run:
+                    os.system(f'echo WOULD + {precmd!r} {cmd!r}')
+                else:
+                    os.system(f'clear;set -x; {precmd} {cmd}')
+            todo = chr(ord(choice) + 1)
+            todo = todo if str(todo) in prompts else 'q'
+            if once:
+                return
+
+    def get_slash_mnt(self):
+        """ TBD """
+        def slurp_file(pathname):
+            with open(pathname, "r", encoding='utf-8') as fh:
+                return [line.strip() for line in fh]
+
+        rv = SimpleNamespace(device='', fstype='')
+        lines = slurp_file('/proc/mounts')
+        for line in lines:
+            wds = re.split(r'\s+', line)
+            if len(wds) >= 4:
+                device, mount, fstype, = wds[0], wds[1], wds[2]
+                if mount == '/mnt':
+                    rv = SimpleNamespace(device=device, fstype=fstype)
+                elif mount == '/' and fstype.lower() == 'btrfs':
+                    print(f'\nALERT: BTRFS ({device}) mounted on /')
+        return rv
+
+    def select_mount(self):
+        """ TBD """
+        command_output = subprocess.check_output(['btrfs', 'filesystem', 'show']).decode('utf-8')
+        lines = command_output.split('\n')
+        self.filesystems = []
+        for line in lines:
+            mat = re.match(r"^Label:\s+('[^']*')", line)
+            if mat:
+                label = mat.group(1)
+            mat = re.search(r"\bpath\s+(/dev/\S+)", line)
+            if mat:
+                path = mat.group(1)
+                self.filesystems.append(SimpleNamespace(label=label, path=path))
+        cmds, todo, mnt = {}, '-', self.slash_mnt
+        for idx, fs in enumerate(self.filesystems):
+            if fs.path == mnt.device:
+                cmd = f'# KEEP {fs.path!r} mounted on /mnt'
+            else:
+                cmd = 'umount /dev && ' if mnt.device else ''
+                cmd += f'mount {fs.path} /mnt # {fs.label}'
+            cmds[str(idx)] = cmd
+            todo = '0'
+        print("MOUNT your root BTRFS on /mnt or KEEP if already mounted...")
+        self.do_command(cmds, todo, once=True, force=True)
+
+    def select_restores(self):
+        """ TBD """
+        os.chdir('/mnt')
+        command_output = subprocess.check_output([
+            'btrfs', 'sub', 'list', '.']).decode('utf-8')
+        lines = command_output.split('\n')
+        prevs, subs, snaps = set(), set(), {}
+        for line in lines:
+            mat = re.search(r"\bpath\s+(\S+)", line)
+            if not mat:
+                continue
+            subpath = mat.group(1)
+            wds = subpath.split('/')
+            if len(wds) == 1:
+                if subpath.startswith('prev.'):
+                    prevs.add(subpath)
+                else:
+                    subs.add(subpath)
+            elif wds[-2].startswith('.snapshots'):
+                try:
+                    base, _ = wds[-1].split('.', maxsplit=1)
+                    snaps[base] = subpath
+                except Exception:
+                    pass
+        # print(f'{snaps=} {subs=} {prevs=}')
+        cmds, todo = {}, '0'
+        for idx, snap in enumerate(snaps):
+            pathname = snaps[snap]
+            cmds[str(idx)] = (f'btrfs sub snap {pathname} {snap}.next; '
+                        + f'mv {snap} {snap}.prev; mv {snap}.next {snap}')
+        cmds[str(len(snaps))] = 'reboot now'
+        self.do_command(cmds, todo, once=False)
+
+    def main(self):
+        """ The top-level function. """
+        # pylint: disable=import-outside-toplevel
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-n', '--dry-run', action="store_true",
+                help='do NOT do anything')
+        opts = parser.parse_args()
+        self.dry_run = opts.dry_run
+        self.select_mount()
+        self.select_restores()
+
+BtrfsRestore().main()

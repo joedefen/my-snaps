@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+My upgrade script.
+"""
+# pylint: disable=import-outside-toplevel,invalid-name
+
+import os
+import sys
+from datetime import datetime
+from InlineMenu import Menu
+
+update_prompts = {
+    '0': 'my-snaps # replace snaps of root, boot, and home',
+    '1': 'cd /boot; rsync -a efi efi.YYYY-MM-DD # SAVE old EFI',
+    '2': '=== RELEASE UPGRADE to Fedora {NEXT_REL}? ===',
+    '3': 'dnf updateinfo # check what is available',
+    '4': 'dnf upgrade --security --bugfix # OR choose next item',
+    '5': 'dnf upgrade',
+    '6': 'dnf autoremove',
+    '7': 'flatpak update',
+    '8': 'flatpak uninstall --unused; flatpak repair',
+    '9': 'reboot now',
+    'q': '=== QUIT ===',
+}
+
+release_prompts = {
+    'a': 'dnf upgrade --refresh',
+    'b': 'reboot now # RETURN to next item after reboot',
+    'c': 'dnf install dnf-plugin-system-upgrade',
+    'd': 'dnf system-upgrade download --refresh --releasever={NEXT_REL}',
+    'e': 'dnf system-upgrade reboot # RETURN to next item after reboot',
+    'f': 'dnf update',
+    'g': 'dnf install rpmconf',
+    'h': 'rpmconf -a # if desired, man rpmconf',
+    'i': 'dnf repoquery --unsatisfied # remove in another terminal',
+    'j': 'dnf repoquery --duplicated # remove in another terminal',
+    'k': 'dnf list extras',
+    'l': r'dnf remove $(dnf repoquery --extras --exclude=kernel,kernel-\*)',
+    'm': 'dnf autoremove',
+    'q': 'QUIT',
+}
+
+class Update:
+    """TBD"""
+    here = None
+    yyyy_mm_dd = None
+
+    def __init__(self):
+        if os.geteuid() != 0: # Re-run the script with sudo
+            print('NOTE: restarting with "sudo"')
+            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
+        Update.here = os.path.dirname(os.path.abspath(__file__))
+        Update.yyyy_mm_dd = datetime.now().strftime("%Y-%m-%d")
+        self.version = self._get_release()
+        self.opts = None
+        self.prompts = update_prompts
+
+    def _get_release(self):
+        rv, is_fedora = '', False
+        lines = []
+        with open('/etc/os-release', 'r', encoding='UTF-8') as file:
+            lines = file.read().splitlines()
+        for line in lines:
+            wds = line.split('=', maxsplit=1)
+            if len(wds) < 2:
+                continue
+            kw, val = wds[0], wds[1].strip('"')
+            if kw == 'NAME':
+                is_fedora = bool(val.startswith('Fedora'))
+            elif kw == 'VERSION_ID':
+                rv = int(val)
+        assert is_fedora, '/etc/os-release does not suggest Fedora?'
+        assert rv, '/etc/os-release does not have Fedora Version?'
+        print(f'NOTE: on Fedora {rv}')
+        return rv
+
+    def _fix_prompts(self):
+        ver = self.version
+        for key, prompt in self.prompts.items():
+            self.prompts[key] = prompt.replace('{NEXT_REL}', str(ver+1)).replace(
+                                'YYYY-MM-DD', Update.yyyy_mm_dd)
+
+    def run_cmd(self, cmd, precmd=None):
+        """Run a command and option prior command
+           - clear the screen first
+           - if dry run, clear the screen first
+         """
+        echo = 'echo WOULD +' if self.opts.dry_run else 'set -x; '
+        os.system('clear')
+        if self.opts.dry_run:
+            cmd = f'{cmd!r}'
+            precmd = f'{precmd!r}' if precmd else None
+        if precmd:
+            print(f'1 ---- {echo} {precmd!r}')
+            os.system(f'{echo} {precmd}')
+            print(f'2 ---- {echo} {cmd!r}')
+            os.system(f'{echo} {cmd}')
+        else:
+            print(f'3 ---- {echo} {cmd!r}')
+            os.system(f'{echo} {cmd}')
+
+    def main(self):
+        """TDB"""
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-n', '--dry-run', action="store_true",
+                help='do NOT do anything')
+        self.opts = parser.parse_args()
+        todo = '0'
+        self._fix_prompts()
+        os.system('clear')
+        while True:
+            menu = Menu(self.prompts, str(todo))
+            choice = menu.prompt()
+            if choice == 'q':
+                sys.exit(0)
+            cmd = self.prompts[choice]
+            if 'my-snaps' in cmd:
+                self.run_cmd(cmd=f'{self.here}/my-snaps')
+            elif '/boot' in cmd:
+                precmd="cd /boot; rm -rf efi.????-??-??"
+                self.run_cmd(cmd, precmd)
+            elif 'RELEASE' in cmd:
+                self.prompts = release_prompts
+                self._fix_prompts()
+            else:
+                self.run_cmd(cmd)
+
+            todo = chr(ord(choice) + 1)
+            if 'RELEASE' in cmd:
+                todo = 'a' # if switched to release_prompts set current to first
+            todo = todo if str(todo) in self.prompts else 'q'
+
+if __name__ == '__main__':
+    Update().main()
