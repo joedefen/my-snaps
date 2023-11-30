@@ -12,7 +12,7 @@ from InlineMenu import Menu
 update_prompts = {
     '0': 'my-snaps # replace snaps of root, boot, and home',
     '1': 'cd /boot; rsync -a efi efi.YYYY-MM-DD # SAVE old EFI',
-    '2': '=== RELEASE UPGRADE to Fedora {NEXT_REL}? ===',
+    '2': '=== RELEASE UPGRADE to Fedora {NEXT_REL}? ===>>>',
     '3': 'dnf updateinfo # check what is available',
     '4': 'dnf upgrade --security --bugfix # OR choose next item',
     '5': 'dnf upgrade',
@@ -32,11 +32,12 @@ release_prompts = {
     'f': 'dnf update',
     'g': 'dnf install rpmconf',
     'h': 'rpmconf -a # if desired, man rpmconf',
-    'i': 'dnf repoquery --unsatisfied # remove in another terminal',
-    'j': 'dnf repoquery --duplicated # remove in another terminal',
-    'k': 'dnf list extras',
-    'l': r'dnf remove $(dnf repoquery --extras --exclude=kernel,kernel-\*)',
-    'm': 'dnf autoremove',
+    'i': 'dnf repoquery --unsatisfied # run: suo dnf erase {pkg}',
+    'j': 'dnf repoquery --duplicated # run next to remove dups',
+    'k': 'dnf remove --duplicates # if duplicates',
+    'l': 'dnf list extras # run next to remove any extras',
+    'm': r'dnf remove $(dnf repoquery --extras --exclude=kernel,kernel-\*)',
+    'n': 'dnf autoremove',
     'q': 'QUIT',
 }
 

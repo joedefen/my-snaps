@@ -53,8 +53,8 @@ class BtrfsRestore:
                 device, mount, fstype, = wds[0], wds[1], wds[2]
                 if mount == '/mnt':
                     rv = SimpleNamespace(device=device, fstype=fstype)
-                elif mount == '/' and fstype.lower() == 'btrfs':
-                    print(f'\nALERT: BTRFS ({device}) mounted on /')
+                # elif mount == '/' and fstype.lower() == 'btrfs':
+                    # print(f'\nALERT: BTRFS ({device}) mounted on /')
         return rv
 
     def select_mount(self):
@@ -79,7 +79,6 @@ class BtrfsRestore:
                 cmd += f'mount {fs.path} /mnt # {fs.label}'
             cmds[str(idx)] = cmd
             todo = '0'
-        print("MOUNT your root BTRFS on /mnt or KEEP if already mounted...")
         self.do_command(cmds, todo, once=True, force=True)
 
     def select_restores(self):

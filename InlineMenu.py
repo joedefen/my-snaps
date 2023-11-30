@@ -151,7 +151,8 @@ class Menu:
             cols, rows = shutil.get_terminal_size()
             if self.cols != cols or self.rows != rows:
                 self.cols, self.rows = cols, rows
-                self.bottom_line(f'resize: rows={self.rows}, cols={self.cols}')
+                # self.bottom_line(f'resize: rows={self.rows}, cols={self.cols}')
+                self.bottom_line(f'Highlight w Up/Down/key and Enter{Term.col(0)}')
                 self.refresh()
             if rv is not None:
                 return rv
