@@ -43,7 +43,6 @@ class BTRFS:
     """ TBD """
     def __init__(self, opts):
         self.tmp_dir = '/tmp/.btrfs/'
-        self.snap_dir = '/.snapshots/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
         self.devs = {}
         self.snaps = {}  # keyed by basename (which is subvol)
@@ -208,7 +207,10 @@ class BTRFS:
         if not subvol_ns:
             subvol_ns = self.rows[self.win.pick_pos].subvol_ns
         dev_ns = self.devs[subvol_ns.dev]
-        if dev_ns.subvols[0].mount != '/':
+        root_ns = dev_ns.subvols[0]
+        if root_ns.mount != '/':
+            # TODO: generalize so that we find the root subvolume by
+            #  naming convention?
             self.win.alert('Sorry, no {subvol_ns.dev} is mounted as "/"')
             return False
 
@@ -227,10 +229,11 @@ class BTRFS:
         if not ans:
             return False
 
-        snap_path = self.snap_dir[:-1] + subvol_ns.path + ans
+        snap_dir = f'{dev_ns.tmp_path}{root_ns.path}/.snapshots'
+        snap_path = f'{snap_dir}{subvol_ns.path}{ans}'
+        if not os.path.isdir(snap_dir):
+            os.makedirs(snap_dir)
 
-        if not os.path.isdir(self.snap_dir):
-            os.makedirs(self.snap_dir)
         cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
         out, err, code = self._slurp_command(cmd)
         if code:
@@ -338,7 +341,7 @@ class BTRFS:
                     raise Exception(f'cannot mount {dev_ns.dev} {code=}')
             dev_ns.tmp_path = tmp_mount_dir
             lines, _, _ = self._slurp_command(f'btrfs sub list {tmp_mount_dir}')
-            
+
             dev_ns.paths = {} # subvols keyed by relative path
             dev_ns.idents = {} # subvols keyed by ident
             dev_ns.subvols = []
