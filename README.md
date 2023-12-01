@@ -1,6 +1,4 @@
 # jdef-fedora-tools README
-> **NOTE: This is not quite ready for consumption as of 2023-11-29. Wait until this notice is removed to even consider using or cloning.**
-
 > Basic upgrade and BTRFS tools for Fedora
 
 ## Introduction
