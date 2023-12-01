@@ -396,7 +396,8 @@ class BTRFS:
                     subvol.mount = mount
                     break
         for dev_ns in self.devs.values():
-            dev_ns.subvols = sorted(dev_ns.subvols, key=lambda x: (x.mount, x.path))
+            dev_ns.subvols = sorted(dev_ns.subvols,
+                    key=lambda x: (x.mount if x.mount else '/~~~~~~~~~~~~', x.path))
 
         if self.DB:
             print('DB: --->>> after determine_mount_points()')

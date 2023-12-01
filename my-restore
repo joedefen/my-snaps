@@ -37,7 +37,7 @@ class BtrfsRestore:
             todo = chr(ord(choice) + 1)
             todo = todo if str(todo) in prompts else 'q'
             if once:
-                return
+                return todo
 
     def get_slash_mnt(self):
         """ TBD """
@@ -81,7 +81,7 @@ class BtrfsRestore:
             todo = '0'
         self.do_command(cmds, todo, once=True, force=True)
 
-    def select_restores(self):
+    def select_restores(self, todo='0'):
         """ TBD """
         os.chdir('/mnt')
         command_output = subprocess.check_output([
@@ -106,13 +106,18 @@ class BtrfsRestore:
                 except Exception:
                     pass
         # print(f'{snaps=} {subs=} {prevs=}')
-        cmds, todo = {}, '0'
+        cmds = {}
         for idx, snap in enumerate(snaps):
             pathname = snaps[snap]
-            cmds[str(idx)] = (f'btrfs sub snap {pathname} {snap}.old; '
-                        + f'mv {snap} {snap}.new; mv {snap}.old {snap}')
+            if os.path.exists(f'{snap}.prev'):
+                cmds[str(idx)] = f'# SKIP {snap}: ERR: {snap}.old exists'
+            elif os.path.exists(f'{snap}.new'):
+                cmds[str(idx)] = f'# SKIP {snap}: DONE: {snap}.new exists'
+            else:
+                cmds[str(idx)] = (f'btrfs sub snap {pathname} {snap}.old && '
+                        + f'mv {snap} {snap}.new && mv {snap}.old {snap}')
         cmds[str(len(snaps))] = 'reboot now'
-        self.do_command(cmds, todo, once=False)
+        return self.do_command(cmds, todo, once=True)
 
     def main(self):
         """ The top-level function. """
@@ -124,6 +129,9 @@ class BtrfsRestore:
         opts = parser.parse_args()
         self.dry_run = opts.dry_run
         self.select_mount()
-        self.select_restores()
+        os.system('clear')
+        todo = '0'
+        while True:
+            todo = self.select_restores(todo=todo)
 
 BtrfsRestore().main()
