@@ -15,7 +15,7 @@ Three tools are provided Fedora maintenance assuming you've install on the defau
   sudo dnf install git  # python 3.8 or later is required
   cd ~  # or anywhere desired (e.g., ~/Projects)
   git clone git@github.com:joedefen/jdef-fedora-tools.git
-  ./jdef-fedora-tools/deploy  # use undeploy to uninstall
+  ./jdef-fedora-tools/deploy  # NOTE: use "undeploy" script to reverse an install
 ```
 * you must keep the source directory (`deploy` creates symbolic links to it tools).
 * within the source directory, you can run `git pull` to update to the latest.
@@ -50,15 +50,16 @@ Choosing `RELEASE UPGRADE` offers this screen:
 `my-snaps` can be used for simple snapshot maintenance. After running, it may look like this:
 ![my-snaps.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-snaps.png?raw=true)
 
-* In the header, the BTRFS paritions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on).
-* All snapshots are expected to be in `/.snapshots/`
-* On first run, highlight each subvolume for which you wish to snapshot, and press `s` to create one.
-* On susquent runs, to replace the snaps (i.e., remove the old one(s), and create a new), press `r`.
+* In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separate to remind you of the fields when needed.
+* All snapshots are expected to be in `/.snapshots/
+* Snapshots are to be named {golden}.YYYY-MM-DD-HHmmss where YYYY, etc., are numerics representing time fields (i.e., a period plus only digits, dashes, and colons).
+* On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create one.
+* On subsequent runs, you can quickly replace all your snapshots (i.e., remove the old one(s), and create new ones) by pressing `r`.
 * Some other keys are:
-  * `d`: to remove highlighted snapshot
-  * `u`: to get disk usage (this can take quite a while)
+  * `d`: to remove highlighted subvolume (usually pick a snapshot); you cannot remove mounted subvolumes; if there are nested subvolumes, those are removed to.
+  * `u`: to get disk usage (this can take quite a while and is not perfect)
   * `?`: to get help on all keys and navigation
-
+* NOTE: actions require confirmation to ensure accidental keys do not clobber your system.
 ---
 
 ## my-restore
@@ -71,7 +72,11 @@ Next you'll see a screen like this:
 
 ![my-restore-p2.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-restore-p2.png?raw=true)
 
-* unless you have a very wide screen, the commands will be truncated, but ensure you can see the snapshots names after `/.snapshots`
+* unless you have a very wide screen, the commands will be truncated, but ensure you can see the snapshots names after `/.snapshots`; basically, you are
+  * creating new writeable snapshots from your saved snapshots, first named {subvol}.old
+  * and then {subvol} is renamed {subvol}.new (new is the one you wish to back out)
+  * and then {subvol}.old is renamed {subvol} so that the restored subvolume becomes master.
+
 * highlight and press enter the snapshots to be restored
 * when done with snapshot restorals, reboot the system
 * **important cleanup**: after the reboot, run some tests and, if happy with the back-out, then run `my-snaps` and remove and `.new` or `.old` subvolumes.

@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TBD
+BTRFS snapshot tool implementing the simplest snapshot strategy; i.e.,
+  * replace all snapshots with new ones before updates, and
+  * generally keep those snapshots until the next update.
+  
+NOTE: for basic debugging, pass --DB and it will dump major objects w/o
+starting the window.
 """
 # pylint: disable=invalid-name,consider-using-with,too-few-public-methods
 # pylint: disable=redefined-outer-name,consider-using-generator
 # pylint: disable=too-many-locals,broad-exception-caught,multiple-statements
 # pylint: disable=too-many-instance-attributes,import-outside-toplevel
-# pylint: disable=global-statement
+# pylint: disable=global-statement,broad-exception-raised
 
 import re
 import os
@@ -20,22 +25,6 @@ import curses as cs
 from types import SimpleNamespace
 from PowerWindow import Window, OptionSpinner
 
-test_lines = (
-"""     Total   Exclusive  Set shared  Filename
-   6.78GiB   124.00KiB     6.78GiB  /tmp/.btrfs/nvme0n1p2/@
-   7.15GiB     7.11GiB    43.78MiB  /tmp/.btrfs/nvme0n1p2/fedora@
- 270.88MiB   213.60MiB    43.71MiB  /tmp/.btrfs/nvme0n1p2/fedora@boot
-  13.01GiB     2.23GiB    10.78GiB  /tmp/.btrfs/nvme0n1p2/fedora@home
-     0.00B       0.00B       0.00B  /tmp/.btrfs/nvme0n1p2/fedora@home-empty
- 317.45GiB       0.00B   317.45GiB  /tmp/.btrfs/nvme0n1p2/fedora@my-opt
-     0.00B       0.00B       0.00B  /tmp/.btrfs/nvme0n1p2/fedora@snapshots
- 972.11MiB   972.11MiB       0.00B  /tmp/.btrfs/nvme0n1p2/fedora@var
-   6.80GiB    19.47MiB     6.78GiB  /tmp/.btrfs/nvme0n1p2/neon@
-  11.68GiB   904.63MiB    10.79GiB  /tmp/.btrfs/nvme0n1p2/neon@home
- 317.45GiB       0.00B   317.45GiB  /tmp/.btrfs/nvme0n1p2/neon@my-opt
-     0.00B       0.00B       0.00B  /tmp/.btrfs/nvme0n1p2/neon@snapshots
- 906.32MiB   906.32MiB       0.00B  /tmp/.btrfs/nvme0n1p2/neon@var
-""")
 
 def human(number):
     """ Return a concise number description."""
@@ -53,30 +42,71 @@ def human(number):
 class BTRFS:
     """ TBD """
     def __init__(self, opts):
-        self.temp_dir = '/tmp/.btrfs/'
-        self.root_dir = '/'
+        self.tmp_dir = '/tmp/.btrfs/'
         self.snap_dir = '/.snapshots/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
-        self.fstab = []
-        self.mounteds = {}  # keyed by subvol
+        self.devs = {}
         self.snaps = {}  # keyed by basename (which is subvol)
-        self.unmounteds = {}  # keyed by subvol
-        self.fatal_error = False
         self.DB = opts.DB
         self.help_mode = False
         self.win = None
         self.rows = []
-        self._load_fstab()
-        self._load_mounts()
-        if not os.path.isdir(self.snap_dir):
-            os.makedirs(self.snap_dir)
-        atexit.register(self.umount_temps)
-        self._mount_temps()
-        # print('\n   BE PATIENT ... (computing size of snapshots) ...\n')
-        # self._get_disk_usage()
-        self._get_snaps_quickly()
+        self.dirty = True # TBD: need to refresh knowledge
+
+        self.blkid_lines = [] # to avoid rerunning "blkid" on refresh
+        self.mounts_lines = [] # to avoid rereading "/proc/mounts" on refresh
+
+        atexit.register(self.umount_tmps)
+
+        self._refresh_if_dirty()
+
+        if self.DB:
+            self._get_disk_usage()
+            sys.exit(0)
 
         self._start_window()
+
+    def _refresh_if_dirty(self):
+        if not self.dirty:
+            return
+        # save sizes for xfer to refresh (cuz expensive)
+        sizes = {}
+        for ns in self.subvol_iter():
+            sizes[f'{ns.dev}{ns.path}'] = ns.size
+        self._load_devs()  # learn all the BTRFS partitions
+        self._mount_tmps()  # mount BTRFS partitions in /tmp/.btrfs
+        self._determine_mount_points() # associated current mounts with subvols
+        self.gather_snapshots()  # determine subvols that are snapshots
+        # restore sizes after refresh
+        for ns in self.subvol_iter():
+            key = f'{ns.dev}{ns.path}'
+            if key in sizes:
+                ns.size = sizes[key]
+        self.make_rows()
+        self.dirty = False
+
+    def subvol_iter(self, subvol_ns=None, top_down=True):
+        """  subvolume iterator recursively top-down (or bottom-up)
+         - by default, all the subvols, not just top-level ones
+         - optionally, just one tree given a subvol
+        """
+        def children_iter(subvol_ns, top_down):
+            if top_down:
+                yield subvol_ns
+            for ns in subvol_ns.children:
+                yield from children_iter(ns, top_down)
+            if not top_down:
+                yield subvol_ns
+
+        if subvol_ns:
+            yield from children_iter(subvol_ns, top_down=top_down)
+            return
+
+        for dev_ns in self.devs.values():
+            # pylint: disable=redefined-argument-from-local
+            for subvol_ns in dev_ns.subvols:
+                if subvol_ns.depth == 0:
+                    yield from children_iter(subvol_ns, top_down=top_down)
 
     @staticmethod
     def _cur_snap_suffix():
@@ -101,7 +131,7 @@ class BTRFS:
                 self.refresh_info()
 
             elif key in (ord('r'), ) and not self.help_mode:
-                self._refresh_all_snaps()
+                self._replace_all_snaps()
 
             elif key in (ord('s'), ) and not self.help_mode:
                 self._create_snap()
@@ -149,99 +179,92 @@ class BTRFS:
                 sys.exit(15)
             win.clear()
 
-    def _refresh_all_snaps(self):
-        snaps, mounts = [], []  # pending snaps to remove, mounts to create snap
-        for ns in self.mounteds.values():
-            if (ns.cat not in ('mounted', ) or ns.mount.startswith('/.snapshots')
-                    or ns.state not in ('intact', )):
-                continue
-            if ns.snaps:
-                mounts.append(ns) # all the subvolumes to do
-                snaps += ns.snaps.values()
-        if not mounts:
+    def _replace_all_snaps(self):
+        """ For every subvolume having snapshots, remove those and create a new snapshot."""
+        def key(subvol_ns):
+            return f'{subvol_ns.dev}{subvol_ns.path}'
+
+        snaps = []  # all are unique
+        snap_ofs = {} # to remove dups (but set() won't work cuz unhashable)
+        for ns in self.subvol_iter():
+            if ns.snap_of:
+                snaps.append(ns)
+                snap_ofs[key(ns.snap_of)] = ns.snap_of
+        if not snaps:
             return
-        subvols_str = ', '.join([ns.subvol for ns in mounts])
-        ans = self.win.answer(f'Set snap suffix for "{subvols_str}" OR clear',
+
+        ans = self.win.answer(f'Set snap suffix for {len(snaps)} replacement snaps OR clear',
                     seed=self._cur_snap_suffix())
         if not ans:
             return
 
-        for snap in snaps:
-            if not self._del_subvolume(snap, ans="y"):
+        for ns in snaps:
+            if not self._del_subvolume(ns, ans="y"):
                 return  # all must succeed
-        for mount in mounts:
-            self._create_snap(mount, ans=ans)
+        for ns in snap_ofs.values():
+            self._create_snap(ns, ans=ans)
 
-    def _create_snap(self, ns=None, ans=None):
-        if not ns:
-            ns = self.rows[self.win.pick_pos]
-        if (ns.cat not in ('mounted', ) or ns.mount.startswith('/.snapshots')
-                or ns.state not in ('intact', )):
-            self.win.alert('Sorry, creating snapshot not permitted')
+    def _create_snap(self, subvol_ns=None, ans=None):
+        if not subvol_ns:
+            subvol_ns = self.rows[self.win.pick_pos].subvol_ns
+        dev_ns = self.devs[subvol_ns.dev]
+        if dev_ns.subvols[0].mount != '/':
+            self.win.alert('Sorry, no {subvol_ns.dev} is mounted as "/"')
             return False
+
+        if subvol_ns.snap_of:
+            self.win.alert('Sorry, cannot create snapshot of snapshot')
+            return False
+
+        if not subvol_ns.mount:
+            self.win.alert('Sorry, cannot create snapshot of unmounted subvolume')
+            return False
+
         if not ans:
             seed=self._cur_snap_suffix()
             ans = self.win.answer(
-                f'Set suffix for snap "{ns.subvol}" OR clear', seed=seed)
+                f'Set suffix for snap "{subvol_ns.path}" OR clear', seed=seed)
         if not ans:
             return False
-        snap_subvol = ns.subvol + ans
-        snap_path = self.snap_dir[:-1] + snap_subvol
-        cmd = f'btrfs sub snap -r {ns.mount} {snap_path}'
+
+        snap_path = self.snap_dir[:-1] + subvol_ns.path + ans
+
+        if not os.path.isdir(self.snap_dir):
+            os.makedirs(self.snap_dir)
+        cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
         out, err, code = self._slurp_command(cmd)
         if code:
             self.win.alert(f'FAILED({code}): {cmd}', message='\n'.join(out + err),
                            height=len(out)+len(err))
             return False
-        snap = SimpleNamespace(cat='snap', state='new',
-                             size=None, path=snap_path)
-        ns.snaps[snap_path] = snap
+        self.dirty = True
         return True
 
-    def _del_subvolume(self, ns=None, ans=""):
-        if not ns:
-            ns = self.rows[self.win.pick_pos]
-        if ns.cat not in ('snap', 'unmounted' ):
-            self.win.alert(f'Sorry, delete not permitted [cat={ns.cat}]')
-            return False
-        snap_path = f'{ns.path}'
+    def _del_subvolume(self, subvol_ns=None, ans=""):
+        if not subvol_ns:
+            subvol_ns = self.rows[self.win.pick_pos].subvol_ns
+
+        for ns in self.subvol_iter(subvol_ns, top_down=False):
+            if ns.mount:
+                self.win.alert(f'Sorry, cannot delete mounted subvol {ns.mount}')
+                return False
+
         if not ans:
-            ans = self.win.answer(f'Type "y" to Delete "{snap_path}"')
+            ans = self.win.answer(f'Type "y" to Delete "{subvol_ns.path}"')
         if not ans.strip().lower().startswith('y'):
             return False
-        cmd = f'btrfs sub del {snap_path}'
-        out, err, code = self._slurp_command(cmd)
-        if code:
-            self.win.alert('FAILED: {cmd}', message='\n'.join(out + err),
-                           height=len(out)+len(err))
-            return False
-        if ns.cat == 'snap':
-            for parent in self.mounteds.values():
-                if ns.path in parent.snaps:
-                    del parent.snaps[ns.path]
-                    break
-        elif ns.cat == 'unmounted':
-            del self.unmounteds[ns.subvol]
+
+        dev_ns = self.devs[subvol_ns.dev]
+        for ns in self.subvol_iter(subvol_ns, top_down=False):
+            snap_path = f'{dev_ns.tmp_path}{ns.path}'
+            cmd = f'btrfs sub del {snap_path}'
+            out, err, code = self._slurp_command(cmd)
+            if code:
+                self.win.alert('FAILED: {cmd}', message='\n'.join(out + err),
+                               height=len(out)+len(err))
+                return False
+            self.dirty = True
         return True
-
-    def _mount_temps(self):
-        """ mount each btrfs as needed """
-        os.makedirs(self.temp_dir, exist_ok=True)
-        for ns in self.fstab:
-            if ns.device not in self.temps:
-                temp_mount_dir = os.path.join(self.temp_dir, os.path.basename(ns.device))
-                os.makedirs(temp_mount_dir, exist_ok=True)
-                code = os.WEXITSTATUS(os.system(f'set -x; mount {ns.device} {temp_mount_dir}'))
-                if code:
-                    self.fatal_error = True
-                else:
-                    ns.mount = temp_mount_dir
-                    self.temps[ns.device] = ns
-
-    def umount_temps(self):
-        """ unmount each btrfs as needed """
-        for ns in self.temps.values():
-            os.system(f'set -x; umount {ns.mount}')
 
     def _slurp_command(self, command):
         if self.DB: print('DB: +', command)
@@ -258,84 +281,172 @@ class BTRFS:
         with open(pathname, "r", encoding='utf-8') as fh:
             return [line.strip() for line in fh]
 
-    def _load_fstab(self):
-#       try:
-#           # NOTE: must run blkid once to populate
-#           lines = self._slurp_file('/run/blkid/blkid.tab')
-#       except Exception:
-        lines, _, _ = self._slurp_command('blkid')
-        self.fstab = []
-        for line in lines:
+    @staticmethod
+    def dev_path(dev):
+        """ Return the full path to a dev (aka device basename) """
+        return f'/dev/{dev}'
+
+    def _load_devs(self):
+        """ Discover all the BTRS Devices """
+
+        if not self.blkid_lines:
+            self.blkid_lines, _, _ = self._slurp_command('blkid')
+        self.devs = {}
+        for line in self.blkid_lines:
+            # /dev/nvme0n1p2: LABEL="btrfs-common"
+            #   UUID="8f60fc2f-872d-4327-aff9-34c4c4cefde7"
+            #   UUID_SUB="d7b0987a-1133-4844-a19b-c6c22350379a"
+            #   BLOCK_SIZE="4096" TYPE="btrfs"
+            #   PARTUUID="02b5122d-5229-c347-a351-142008b89149"
+
             matches = re.findall(r'(\w+)="([^"]+)"', line)
             ns = SimpleNamespace() # Create a dictionary to store the fields and values
             for match in matches:
                 field, value = match[0].lower(), match[1]
-                if field in ('label', 'uuid', 'type'):
+                if field in ('type',):
                     setattr(ns, field, value)
-            if not hasattr(ns, 'type') or not hasattr(ns, 'uuid') or not hasattr(ns, 'label'):
+            if not hasattr(ns, 'type'):
                 continue
-            ns.device, _ = line.split(': ', maxsplit=1)
-            if ns.type in ('btrfs', ) and ns.device:
+            ns.dev = os.path.basename(line.split(': ', maxsplit=1)[0])
+            if ns.type in ('btrfs', ) and ns.dev:
                 delattr(ns, 'type')
-                rows, _, _ = self._slurp_command(f'df -h {ns.device}')
+                rows, _, _ = self._slurp_command(f'df -h {self.dev_path(ns.dev)}')
                 ns.diskfree = rows[1] if len(rows) >= 2 else ''
-                self.fstab.append(ns)
+                self.devs[ns.dev] = ns
+        if self.DB:
+            print('DB: --->>> after load_devs()')
+            for dev, ns in self.devs.items():
+                print(f'DB: {dev}: {vars(ns)}')
 
-    def _load_mounts(self):
-        lines = self._slurp_file('/proc/mounts')
-        self.mounteds = {}
-        dev_subvols = {}
-        root_btrfs_dev = ''
-        for line in lines:
+    @staticmethod
+    def init_subvol_ns(dev='', path='', ident=None, parent=None):
+        """ Create a subvolume namespace"""
+        return SimpleNamespace(dev=dev, path=path,
+               size=None, depth=0, mount='', snaps=[],
+                snap_of=None, children=[], ident=ident, parent=parent)
+
+    def _mount_tmps(self):
+        """ mount each btrfs as needed """
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        for dev, dev_ns in self.devs.items():
+            tmp_mount_dir = os.path.join(self.tmp_dir, dev)
+            if not os.path.ismount(tmp_mount_dir):
+                os.makedirs(tmp_mount_dir, exist_ok=True)
+                code = os.WEXITSTATUS(os.system(
+                        f'set -x; mount {self.dev_path(dev_ns.dev)} {tmp_mount_dir}'))
+                if code:
+                    raise Exception(f'cannot mount {dev_ns.dev} {code=}')
+            dev_ns.tmp_path = tmp_mount_dir
+            lines, _, _ = self._slurp_command(f'btrfs sub list {tmp_mount_dir}')
+            
+            dev_ns.paths = {} # subvols keyed by relative path
+            dev_ns.idents = {} # subvols keyed by ident
+            dev_ns.subvols = []
+            for line in lines:
+                wds = line.split(maxsplit=8)
+                if len(wds) < 9:
+                    continue
+                ident, parent, path = wds[1], wds[6], f'/{wds[8]}'
+                child = BTRFS.init_subvol_ns(dev=dev,
+                             path=path, ident=ident, parent=parent)
+                if parent in dev_ns.idents:
+                    parent_ns = dev_ns.idents[parent]
+                    child.depth = parent_ns.depth+1
+                    parent_ns.children.append(child)
+                else: # top-levels are in the dev
+                    dev_ns.subvols.append(child)
+                dev_ns.idents[ident] = child
+                dev_ns.paths[path] = child
+        if self.DB:
+            print('DB: --->>> after mount_tmps()')
+            for dev, dev_ns in self.devs.items():
+                print(f'DB: {dev=}: keys={vars(dev_ns).keys()}')
+                for subvol in self.subvol_iter():
+                    print(f'DB:   {'  '*subvol.depth}subvol: {vars(subvol)}')
+
+
+    def umount_tmps(self):
+        """ unmount each btrfs as needed """
+        for ns in self.devs.values():
+            os.system(f'set -x; umount {ns.tmp_path}')
+
+    def _determine_mount_points(self):
+        if not self.mounts_lines:
+            self.mounts_lines = self._slurp_file('/proc/mounts')
+        for line in self.mounts_lines:
             wds = re.split(r'\s+', line)
             if len(wds) < 4:
                 continue
 
-            device, mount, fstype, opts = wds[0], wds[1], wds[2], wds[3]
+            mount, fstype, opts = wds[1], wds[2], wds[3]
             if mount == '/' and fstype != 'btrfs':
                 assert False, f'root is not BTRFS ({mount}, {fstype})'
             if fstype != 'btrfs':
                 continue
 
-            match = re.search(r'subvol=([^,\s]+)', opts)
+            match = re.search(r'subvolid=(\d+)', opts)
             if not match:
                 continue
-            ns = SimpleNamespace(cat='mounted', state='intact',
-                    device=device[5:], mount=mount,
-                    subvol=match.group(1), size=None, snaps={})
-            subvols = dev_subvols.get(ns.device, {})
-            subvols[ns.subvol] = ns
-            dev_subvols[ns.device] = subvols
-            if mount == '/':
-                root_btrfs_dev = ns.device
+            ident = match.group(1)
+            for subvol in self.subvol_iter():
+                if subvol.ident == ident:
+                    subvol.mount = mount
+                    break
+        for dev_ns in self.devs.values():
+            dev_ns.subvols = sorted(dev_ns.subvols, key=lambda x: (x.mount, x.path))
 
-        if not root_btrfs_dev:
-            self.stop_curses()
-            assert root_btrfs_dev, "root (/) not found in /proc/mounts (????)"
-        # print(f'{root_btrfs_dev=}')
-        # print(f'{dev_subvols=}')
-        # print(f'{dev_subvols[root_btrfs_dev]=}')
-        self.mounteds = dev_subvols[root_btrfs_dev]
+        if self.DB:
+            print('DB: --->>> after determine_mount_points()')
+            for subvol in self.subvol_iter():
+                if subvol.mount:
+                    print(f'DB:   {subvol.dev=} {subvol.mount=} {subvol.path=}')
 
-    def _get_snaps_quickly(self):
-        lines, _, _ = self._slurp_command('btrfs sub list /')
-        for line in lines:
-            # Expecting:
-            # ID 355 gen 142946 top level 338 path .snaps/fedora@root.2023-10-19-174340
-            wds = line.split(maxsplit=8)
-            kw, path = wds[-2], wds[-1]
-            assert kw == 'path', f"cannot parse {line!r} from 'btrfs sub list /'"
-            subvol = os.path.join('/', path)
-            if subvol.startswith(self.snap_dir):
-                ns = SimpleNamespace(cat='snap', state='intact',
-                                     size=None, path=subvol)
-                wds = os.path.basename(subvol).split('.', maxsplit=1)
-                if len(wds) == 2:
-                    for parent_dict in (self.mounteds, self.unmounteds):
-                        parent_ns = parent_dict.get('/' + wds[0], None)
-                        if parent_ns:
-                            parent_ns.snaps[ns.path] = ns
-                            break
+    def gather_snapshots(self):
+        """ TBD """
+        for subvol in self.subvol_iter():
+            wds = subvol.path.split('/.snapshots/', maxsplit=1)
+            if len(wds) < 2:
+                continue
+            mat = re.match(r'^(.*)\.[\-\d\:]+', wds[1])
+            if not mat:
+                continue
+            of_path = f'/{mat.group(1)}'
+            dev_ns = self.devs[subvol.dev]
+            of_subvol = dev_ns.paths.get(of_path, None)
+            if of_subvol:
+                of_subvol.snaps.append(subvol)
+                of_subvol.snaps = sorted(of_subvol.snaps, key=lambda x: x.path)
+                subvol.snap_of = of_subvol
+        if self.DB:
+            print('DB: --->>> after gather_snapshots()')
+            for subvol in self.subvol_iter():
+                if subvol.snaps:
+                    print(f'DB:   {subvol.dev=} {subvol.mount=} {subvol.path=}')
+                for snap in subvol.snaps:
+                    print(f'DB:   snap {snap.path=}')
+
+
+    def make_rows(self):
+        """ Create the set of rows for display with only the subset of info
+        needed for display"""
+        def init_row(size, mount, dev, path, subvol_ns):
+            return SimpleNamespace(size=size, mount=mount,
+                               dev=dev, path=path, subvol_ns=subvol_ns)
+
+        self.rows = []
+
+        for dev, dev_ns in self.devs.items():
+            for ns in dev_ns.subvols:
+                row = init_row(ns.size, ns.mount, dev, ns.path, ns)
+                self.rows.append(row)
+                for snap in ns.snaps:
+                    row = init_row(snap.size,
+                           snap.mount, snap.dev, snap.path, snap)
+                    self.rows.append(row)
+        if self.DB:
+            for row in self.rows:
+                print(f'DB: row: {row.size=} {row.mount=}'
+                      f' {row.dev=} {row.path=!r}')
 
     def _get_disk_usage(self):
         """This actually only works for the snaps."""
@@ -353,60 +464,60 @@ class BTRFS:
                 val = 0
             return int(round(val))
 
-        node = f'{self.snap_dir}*'
-        lines, _, _ = self._slurp_command(f'btrfs fi du -s {node}')
-        for line in lines[1:]:
-            total, exclusive, _, pathname = re.split(r'\s+', line.strip(), maxsplit=3)
-            subvol = os.path.join('/', os.path.basename(pathname))
-            exclusive = convert_human(exclusive)
-            total = convert_human(total)
-            wds = subvol.split('.', maxsplit=1)
-            if len(wds) == 2:
-                for parent_dict in (self.mounteds, self.unmounteds):
-                    parent_ns = parent_dict.get(wds[0], None)
-                    if parent_ns:
-                        snap_ns = parent_ns.snaps.get(pathname, None)
-                        if not snap_ns:
-                            snap_ns = SimpleNamespace(cat='snap', state='intact',
-                                                 size=exclusive, path=pathname)
-                        else:
-                            snap_ns.size = exclusive
-                        parent_ns.snaps[pathname] = snap_ns
-                        if not parent_ns.size or parent_ns.size < total:
-                            parent_ns.size = total
-                        break
+        for dev_ns in self.devs.values():
+            lines, _, _ = self._slurp_command(
+                f'cd "{dev_ns.tmp_path}" && btrfs fi du -s */.snapshots/*')
+            for line in lines[1:]:
+                total, exclusive, _, pathname = re.split(r'\s+', line.strip(), maxsplit=3)
+                pathname = os.path.join('/', pathname)
+                if not pathname in dev_ns.paths:
+                    continue
+                snap_ns = dev_ns.paths[pathname]
+                snap_ns.size = convert_human(exclusive)
+                if snap_ns.snap_of:
+                    if not snap_ns.snap_of.size:
+                        snap_ns.snap_of.size = 0
+                    snap_ns.snap_of.size = max(convert_human(total),
+                        snap_ns.snap_of.size)
 
-    def _subs_width(self):
-        rv = max([len(x) for x in list(self.mounteds) + list(self.unmounteds)])
-        return max(len('Subvolume'), rv)
-    def _mounts_width(self):
-        rv = max([len(x.mount) for x in list(self.mounteds.values())])
-        return max(len('Mount'), rv)
-    def _devs_width(self):
-        rv = max([len(x.device) for x in list(
-            self.mounteds.values()) + list(self.unmounteds.values())])
-        return max(len('Device'), rv)
+        for row in self.rows:
+            row.size = row.subvol_ns.size
+
+        if self.DB:
+            print('DB: --->>> after _get_disk_usage()')
+            for ns in self.subvol_iter():
+                print(f'DB: {ns.size=} {ns.path=!r}')
+
 
     def refresh_info(self, body=None):
         """ TBD """
-        win = self.win
-        subs_width = self._subs_width()
-        mounts_width = self._mounts_width()
-        devs_width = self._devs_width()
+        def calc_path_width():
+            rv = max([len(x.path) for x in self.rows])
+            return max(len('Subvolume'), rv)
+        def calc_mounts_width():
+            rv = max([len(x.mount) for x in self.rows])
+            return max(len('Mount'), rv)
+        def calc_devs_width():
+            rv = max([len(x.dev) for x in self.rows])
+            return max(len('Device'), rv)
 
-        self.rows = []
+        win = self.win
+        self._refresh_if_dirty()
+        path_width = calc_path_width()
+        mounts_width = calc_mounts_width()
+        devs_width = calc_devs_width()
 
         win.add_header('MY-SNAPS', attr=cs.A_REVERSE)
         win.add_header(
             '  s:+snap  d:-subvol  u:disk-usage  r:replace-all  Ctrl-C:quit  ?:help',
             resume=True)
-        for fs in self.fstab:
-            win.add_header(f'{fs.uuid} {fs.diskfree}')
+        for dev_ns in self.devs.values():
+            win.add_header(f'df: {dev_ns.diskfree}')
         win.add_header(
-              f'{"Device":>{devs_width}}'
-              f'  {"Mount":>{mounts_width}}'
+              f'{"Mount":>{mounts_width}}'
               f' {"~Size":>7}'
-              f' {"Subvolume":<{subs_width}}',
+              f' {"Device":>{devs_width}}'
+              f' {"Subvolume":<{path_width}}',
               attr=cs.A_BOLD,
               )
 
@@ -416,27 +527,14 @@ class BTRFS:
                 win.add_body(line, attr=cs.A_REVERSE)
             return
 
-        if self.mounteds:
-            for sub, ns in self.mounteds.items():
-                self.rows.append(ns)
-                win.add_body(f'{ns.device:>{devs_width}}'
-                      f'  {ns.mount:>{mounts_width}}'
-                      f' {"-" if ns.size is None else human(ns.size):>7}'
-                      f' {sub:<{subs_width}}')
-                for pathname, snap in ns.snaps.items():
-                    self.rows.append(snap)
-                    win.add_body(f'{"":>{devs_width}}'
-                          # f' {"-" * (mounts_width-1) + ">"}'
-                          f'  {" " * mounts_width}'
-                          f' {"-" if snap.size is None else human(snap.size):>7}'
-                          f' {pathname}')
-        if self.unmounteds:
-            for sub, ns in self.unmounteds.items():
-                self.rows.append(ns)
-                win.add_body(f'{ns.device:>{devs_width}}'
-                      f' {"-" if ns.size is None else human(ns.size):>7}'
-                      f' {"." * mounts_width}'
-                      f' {sub:<{subs_width}}')
+        for row in self.rows:
+            wds = row.path.split('/.snapshots/', maxsplit=1)
+            shown_path = f'  | {wds[1]}' if len(wds) > 1 else row.path
+            win.add_body(
+                  f'{row.mount:>{mounts_width}}'
+                  f' {"-" if row.size is None else human(row.size):>7}'
+                  f' {row.dev:>{devs_width}}'
+                  f' {shown_path:<{path_width}}')
 
 if __name__ == "__main__":
     btrfs = None
@@ -459,7 +557,7 @@ if __name__ == "__main__":
             for sub in btrfs.snaps.values():
                 print(vars(sub))
 
-        btrfs.umount_temps()
+        btrfs.umount_tmps()
 
     try:
         main()
