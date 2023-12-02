@@ -16,7 +16,9 @@ Three tools are provided Fedora maintenance assuming you've install on the defau
   ./jdef-fedora-tools/deploy  # NOTE: use "undeploy" script to reverse an install
 ```
 * you must keep the source directory (`deploy` creates symbolic links to the tools).
-* within the source directory, you can run `git pull` to update to the latest.
+* within the source directory, you can run `git pull` to update to the latest
+* for some initial testing, see the last section, "Initial and Regression Testing".
+
 ---
 
 ## my-upgrade
@@ -99,6 +101,19 @@ Next you'll see a screen like this:
 * install these tools per the instructions.
 * use `my-restore` to return to a working system and reboot and eventually clean up again.
 
+
+## Initial and Regression Testing
+Do not assume the BTRFS scripts work for you and then be disappointed later. After install:
+* Run `my-snaps` and ensure:
+  * all the top-level subvolumes are showing, and
+  * the expected snapshots are showing, and
+  * as needed, add snapshot for at least every volume you wish to restore.
+
+* If `my-snaps` is working, run `my-restore` and, after device selection, that the RESTORE entries look right, and
+* If all looks well, RESTORE and then UN-RESTORE one of your subvolumes (leaving all subvolumes in RESTORE or RE-RESTORE state)
+* After the tests, run `my-snaps` again and remove the .old subvolumes (if there are any .new subvolumes UN-RESTORE them with `my-restore` and repeat).
+
+If there are issues, ensure snapshots are in `/.snapshots` and they are named `{subvol}.{timespec}` where `{timespec}` has only numbers, dashes and colons.
 
 ## Final Thoughts
 * `my-snaps` and `my-restore` support the most simple BTRFS snapshot strategy (for update protection and limited file recovery).  To guard against huge catastrophes, add complementary strategies such as these so you can quickly reinstall if needed:

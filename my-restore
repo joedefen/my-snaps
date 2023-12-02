@@ -97,7 +97,7 @@ class BtrfsRestore:
             wds = subpath.split('/')
             if len(wds) > 1 and wds[-2].startswith('.snapshots'):
                 try:
-                    subvol, _ = wds[-1].split('.', maxsplit=1)
+                    subvol, _ = wds[-1].rsplit('.', maxsplit=1)
                     snaps[subpath] = subvol
                 except Exception:
                     pass
