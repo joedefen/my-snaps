@@ -534,8 +534,9 @@ class BTRFS:
         for row in self.rows:
             wds = row.path.split('/.snapshots/', maxsplit=1)
             shown_path = f'  | {wds[1]}' if len(wds) > 1 else row.path
+            mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
             win.add_body(
-                  f'{row.mount:>{mounts_width}}'
+                  f'{mount_str:>{mounts_width}}'
                   f' {"-" if row.size is None else human(row.size):>7}'
                   f' {row.dev:>{devs_width}}'
                   f' {shown_path:<{path_width}}')

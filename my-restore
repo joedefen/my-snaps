@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ Program to run """
 # pylint: disable=invalid-name,broad-exception-caught
-# pylint: disable=too-many-locals
+# pylint: disable=too-many-locals,too-many-arguments
 
 import sys
 import os
@@ -81,43 +81,59 @@ class BtrfsRestore:
             todo = '0'
         self.do_command(cmds, todo, once=True, force=True)
 
-    def select_restores(self, todo='0'):
+    def select_restores(self, todo='a'):
         """ TBD """
+        # pylint: disable=too-many-branches
         os.chdir('/mnt')
         command_output = subprocess.check_output([
             'btrfs', 'sub', 'list', '.']).decode('utf-8')
         lines = command_output.split('\n')
-        prevs, subs, snaps = set(), set(), {}
+        snaps = {}
         for line in lines:
             mat = re.search(r"\bpath\s+(\S+)", line)
             if not mat:
                 continue
             subpath = mat.group(1)
             wds = subpath.split('/')
-            if len(wds) == 1:
-                if subpath.startswith('prev.'):
-                    prevs.add(subpath)
-                else:
-                    subs.add(subpath)
-            elif wds[-2].startswith('.snapshots'):
+            if len(wds) > 1 and wds[-2].startswith('.snapshots'):
                 try:
-                    base, _ = wds[-1].split('.', maxsplit=1)
-                    snaps[base] = subpath
+                    subvol, _ = wds[-1].split('.', maxsplit=1)
+                    snaps[subpath] = subvol
                 except Exception:
                     pass
         # print(f'{snaps=} {subs=} {prevs=}')
         cmds = {}
-        for idx, snap in enumerate(snaps):
-            pathname = snaps[snap]
-            if os.path.exists(f'{snap}.prev'):
-                cmds[str(idx)] = f'# SKIP {snap}: ERR: {snap}.old exists'
-            elif os.path.exists(f'{snap}.new'):
-                cmds[str(idx)] = f'# SKIP {snap}: DONE: {snap}.new exists'
+        skips = set()
+        idx = 'a'
+        snaps = {k: snaps[k] for k in sorted(snaps)}
+        for snap_path, subvol in snaps.items():
+            subvol = snaps[snap_path]
+            if subvol in skips:
+                continue
+            has_old = os.path.exists(f'{subvol}.old')
+            has_new = os.path.exists(f'{subvol}.new')
+            if not os.path.exists(f'{subvol}'):
+                cmds[str(idx)] = f'# ERR: {subvol} does NOT exist'
+                skips.add(subvol)
+            elif has_old and has_new:
+                cmds[str(idx)] = f'# ERR: {subvol}.old AND {subvol}.new exists'
+                skips.add(subvol)
+            elif os.path.exists(f'{subvol}.old'):
+                cmds[str(idx)] = (f'echo RE-RESTORE "{subvol}" && '
+                    f'mv "{subvol}" "{subvol}.new" && mv "{subvol}.old" "{subvol}"')
+                skips.add(subvol)
+            elif os.path.exists(f'{subvol}.new'):
+                cmds[str(idx)] = (f'echo UN-RESTORE "{subvol}" && '
+                    f'mv "{subvol}" "{subvol}.old" && mv "{subvol}.new" "{subvol}"')
+                skips.add(subvol)
             else:
-                cmds[str(idx)] = (f'btrfs sub snap {pathname} {snap}.old && '
-                        + f'mv {snap} {snap}.new && mv {snap}.old {snap}')
-        cmds[str(len(snaps))] = 'reboot now'
-        return self.do_command(cmds, todo, once=True)
+                basename = os.path.basename(snap_path)
+                cmds[idx] = (f'echo RESTORE "{basename}" && '
+                    f'btrfs sub snap "{snap_path}" "{subvol}.old" && '
+                        + f'mv "{subvol}" "{subvol}.new" && mv "{subvol}.old" "{subvol}"')
+            idx = chr(ord(idx) + 1)
+        cmds[idx] = 'reboot now'
+        return self.do_command(cmds, once=True, todo=todo)
 
     def main(self):
         """ The top-level function. """
@@ -130,7 +146,7 @@ class BtrfsRestore:
         self.dry_run = opts.dry_run
         self.select_mount()
         os.system('clear')
-        todo = '0'
+        todo = 'a'
         while True:
             todo = self.select_restores(todo=todo)
 

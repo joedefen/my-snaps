@@ -70,30 +70,33 @@ Next you'll see a screen like this:
 
 ![my-restore-p2.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-restore-p2.png?raw=true)
 
-* unless you have a very wide screen, the commands will be truncated, but ensure you can see the snapshots names after `/.snapshots`; basically, you are
+* unless you have a very wide screen, the commands will be truncated, but ensure you can see the snapshots names after "RESTORE"; when restoring, you are
   * creating new writeable snapshots from your saved snapshots, first named {subvol}.old
   * and then {subvol} is renamed {subvol}.new (new is the one you wish to back out)
-  * and then {subvol}.old is renamed {subvol} so that the restored subvolume becomes master.
+  * and then {subvol}.old is renamed {subvol} so that the restored subvolume becomes current.
 
-* highlight and press enter the snapshots to be restored
-* when done with snapshot restorals, reboot the system
-* **important cleanup**: after the reboot, run some tests and, if happy with the back-out, then run `my-snaps` and remove and `.new` or `.old` subvolumes.
+* highlight and press enter the subvolumes to effect the given action:
+  * RESTORE promotes the snapshot to current
+  * UN-RESTORE demotes a restored snapshot to {subvol}.old and rename {subvol}.new as {subvol}
+  * RE-RESTORE undoes a UN-RESTORE by renaming {subvol} as {subvol}.new and {subvol}.old as {subvol}
+* **unless you see some UN-RESTORE actions list, there are no pending changes**
+* when you are done with setting up the snapshot restorals, reboot the system
 
-**--- Restore Special Cases ---**
+**------------- IMPORTANT NOTES -------------**
 
-**An update will not boot.**  If an update will not boot:
+**When a restore is tested and deemed satisfactory then clean up.**
+* To clean up, launch `my-snaps` and remove and `.new` or `.old` subvolumes.
+* **Warning**: Failing to cleanup will confuse the next `my-restore` and suggest undoing the successful restore.
+
+**When a restore is tested and deemed unsatisfactory:**
+* Launch `my-snaps` and adjust the restored snapshots as desired.
+* Then reboot, test, and iterate until you are done and then clean up (described immediately above).
+
+**An update or restore will not boot.**  If an update or restore will not boot:
 * boot the live installer.
 * install these tools per the instructions.
-* restore the appropriate snapshots using `my-restore` and reboot
+* use `my-restore` to return to a working system and reboot and eventually clean up again.
 
-**A back-out needs undone.**  If you regret doing a back-out, then manually:
-* `sudo -i` # become root in effect (take care)
-* `ls-blk -f` # to help identify the partition holding your system BTRFS
-* `mount {your-btrs-partition} /mnt`
-* `cd /mnt; ls`  # enter /mnt, and view the names of the subvolumes
-* for every `.new` entry, move it back into place; e.g., for a subvolume called `fedora@root`,
-  * `mv fedora@root fedora@root.old; mv fedora@root.new fedora@root`
-* `reboot now`
 
 ## Final Thoughts
 * `my-snaps` and `my-restore` support the most simple BTRFS snapshot strategy (for update protection and limited file recovery).  To guard against huge catastrophes, add complementary strategies such as these so you can quickly reinstall if needed:
