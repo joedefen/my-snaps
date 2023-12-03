@@ -365,7 +365,7 @@ class BTRFS:
             for dev, dev_ns in self.devs.items():
                 print(f'DB: {dev=}: keys={vars(dev_ns).keys()}')
                 for subvol in self.subvol_iter():
-                    print(f'DB:   {'  '*subvol.depth}subvol: {vars(subvol)}')
+                    print(f'DB:   {"  "*subvol.depth}subvol: {vars(subvol)}')
 
 
     def umount_tmps(self):
