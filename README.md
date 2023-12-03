@@ -12,7 +12,7 @@ Three tools are provided Fedora maintenance assuming you've install on the defau
 ```
   sudo dnf install git  # python 3.8 or later is required
   cd ~  # or anywhere desired (e.g., ~/Projects)
-  git clone git@github.com:joedefen/jdef-fedora-tools.git
+  git clone https://github.com/joedefen/jdef-fedora-tools.git
   ./jdef-fedora-tools/deploy  # NOTE: use "undeploy" script to reverse an install
 ```
 * you must keep the source directory (`deploy` creates symbolic links to the tools).
