@@ -32,7 +32,7 @@ release_prompts = {
     'f': 'dnf update',
     'g': 'dnf install rpmconf',
     'h': 'rpmconf -a # if desired, man rpmconf',
-    'i': 'dnf repoquery --unsatisfied # run: suo dnf erase {pkg}',
+    'i': 'dnf repoquery --unsatisfied # run: suoo dnf erase {pkg}',
     'j': 'dnf repoquery --duplicated # run next to remove dups',
     'k': 'dnf remove --duplicates # if duplicates',
     'l': 'dnf list extras # run next to remove any extras',

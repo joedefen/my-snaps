@@ -6,5 +6,5 @@ HERE="$(dirname "$(readlink -f "$0")")"
 
 for x in my-update my-snaps my-restore; do
     sudo rm -f "$DEST/$x"
-    sudo ln -s "$HERE/$x" "$DEST/$x"
+    (set -x; sudo ln -s "$HERE/$x" "$DEST/$x")
 done
