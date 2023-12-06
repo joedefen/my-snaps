@@ -47,6 +47,7 @@ class BTRFS:
         self.devs = {}
         self.DB = opts.DB
         self.add_limit = opts.add_snap_max
+        self.label = ''
         self.help_mode = False
         self.win = None
         self.rows = []
@@ -64,6 +65,8 @@ class BTRFS:
             sys.exit(0)
 
         if self.add_limit > 0:
+            if opts.label:
+                self.label = opts.label
             success = self._replace_eldest_snaps()
             print("OK" if success else "FAIL", f'add_snap_limit={self.add_limit}')
             if success and opts.print:
@@ -134,9 +137,8 @@ class BTRFS:
                 if subvol_ns.depth == 0:
                     yield from children_iter(subvol_ns, top_down=top_down)
 
-    @staticmethod
-    def _cur_snap_suffix():
-        return datetime.now().strftime('.%Y-%m-%d-%H%M%S')
+    def _cur_snap_suffix(self):
+        return datetime.now().strftime('.%Y-%m-%d-%H%M%S') + self.label
 
     def stop_curses(self):
         """Terminate curses if running."""
@@ -616,6 +618,8 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser()
         parser.add_argument('-s', '--add-snap-max', type=int, default=0,
                 help='add snapshots limited to value per subvol [1<=val<=8]')
+        parser.add_argument('-L', '--label', type=str,
+                help='add given label to -s snapshots')
         parser.add_argument('-p', '--print', action="store_true",
                 help='print the subvolumes/snaps and exit')
         parser.add_argument('--DB', action="store_true",
