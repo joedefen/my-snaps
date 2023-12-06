@@ -4,7 +4,7 @@
 ## Introduction
 Three tools are provided Fedora maintenance assuming you've installed on the default BTRFS:
 * `my-upgrade` steps you through updating the current point release or upgrading to the next major point release. `my-upgrade` is very much Fedora specific and does not require you to use `my-snaps` although integrated.
-* `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates).
+* `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates). You can schedule period snapshots with the additional tool, `my-snaps-cronjob`.
 * `my-restore` assists restoring snapshots to back out changes to the system
 * `my-snaps` and `my-restore` are not necessarily Fedora specific, but you may need to adjust a few instructions to use them elsewhere.
 
@@ -57,13 +57,24 @@ Choosing `RELEASE UPGRADE` offers this sub-menu:
 * In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separate to remind you of the fields when needed.
 * All snapshots are expected to be in `/.snapshots/`
 * Snapshots are to be named `{subvol}.YYYY-MM-DD-HHmmss` where `YYYY` are time fields separated by dashes or colons only.
-* On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create them.
-* On subsequent runs, you can quickly replace all your snapshots (i.e., remove the old one(s), and create new ones) by pressing `r`.
+* On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create as many as you wish to keep normally.
+* On subsequent runs, `r` replaces your eldest snapshot for each top-level subvolume that has any snapshots.
+  * to describe snapshots, add a short label when prompted (e.g., "=preF40upg").
+  * **note**: you cannot use the characters "." or "/" in the snapshot names/labels
+
 * Some other keys are:
   * `d`: to remove highlighted subvolume (usually pick a snapshot); you cannot remove mounted subvolumes; if there are nested subvolumes, those are removed too.
   * `u`: to get disk usage (this can take quite a while and is not perfect)
   * `?`: to get help on all keys and navigation
-* **NOTE**: actions require confirmation to ensure accidental keystokes do not clobber your system.
+* **NOTE**: actions require confirmation to ensure accidental keystrokes do not clobber your system.
+
+**Non-interactive use**: `my-snaps` can be run non-interactively with these options:
+* `-p` or `--print` dumps your top-level subvolumes and their snapshots
+* `-s{N}` or `--add-snap-max={N}` adds a new snapshot for each subvolume with snapshots and removes the eldest until there are no more than `{N}`.
+
+**Periodic Snapshots**: The included tool, `my-snaps-cronjob` can be added to cron (with `crontab -e`) to set up periodic snapshots; read `my-snaps-cronjob` for details.
+
+
 ---
 
 ## my-restore

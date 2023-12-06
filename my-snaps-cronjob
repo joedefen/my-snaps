@@ -1,0 +1,35 @@
+#!/bin/bash
+# creates snapshots from a cronjob assumed to be run on a system that
+# may not be up 24/7 ... so run it regularly in cron.
+#
+# by default, it saves up to 4 snapshots created weekly; to vary,
+# pass to arguments:
+#   - the number of snapshots to retain (e.g., 3)
+#   - a description of a past time for the period (e.g., "4 days ago")
+# Then create a cronjob that will be run at least once when up normally;
+#  e.g., if normally the system will be up for 10m or more, this tries
+# runs the script every 10m only creating new snaps if the previous
+# run at least 4 days ago
+#
+# 1-59/10 * * * * /usr/bin/local/my-snaps-cronjob 3 "4 days ago"
+
+
+HERE="$(dirname "$(readlink -f "$0")")"
+LIMIT=4
+FLOOR="1 week ago"
+
+if [[ $1 != '' ]]; then LIMIT="$1"; fi
+if [[ $2 != '' ]]; then FLOOR="$2"; fi
+
+FLOOR_DATE=$(date -d "1 week ago" +%s)
+LAST_RUN="${HOME}/.last-my-snaps-cron-run"
+LAST_DATE=""
+if [[ -e $LAST_RUN ]]; then LAST_DATE="$(date -r "$LAST_RUN" +%s)"; fi
+
+# Check if the last run file exists and is older than one week
+if [[ $LAST_DATE -le $FLOOR_DATE ]]; then
+    "${HERE}/my-snaps" "-s${LIMIT}"
+    (set -x; touch "$LAST_RUN")
+else
+    echo "my-snaps skipped since executed less than '${FLOOR}'."
+fi

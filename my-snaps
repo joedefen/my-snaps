@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 BTRFS snapshot tool implementing the simplest snapshot strategy; i.e.,
-  * replace all snapshots with new ones before updates, and
+  * replace eldest snapshots with new ones before updates, and
   * generally keep those snapshots until the next update.
   
 NOTE: for basic debugging, pass --DB and it will dump major objects w/o
@@ -12,7 +12,7 @@ starting the window.
 # pylint: disable=redefined-outer-name,consider-using-generator
 # pylint: disable=too-many-locals,broad-exception-caught,multiple-statements
 # pylint: disable=too-many-instance-attributes,import-outside-toplevel
-# pylint: disable=global-statement,broad-exception-raised
+# pylint: disable=global-statement,broad-exception-raised,too-many-branches
 
 import re
 import os
@@ -45,8 +45,8 @@ class BTRFS:
         self.tmp_dir = '/tmp/.btrfs/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
         self.devs = {}
-        self.snaps = {}  # keyed by basename (which is subvol)
         self.DB = opts.DB
+        self.add_limit = opts.add_snap_max
         self.help_mode = False
         self.win = None
         self.rows = []
@@ -63,7 +63,34 @@ class BTRFS:
             self._get_disk_usage()
             sys.exit(0)
 
+        if self.add_limit > 0:
+            success = self._replace_eldest_snaps()
+            print("OK" if success else "FAIL", f'add_snap_limit={self.add_limit}')
+            if success and opts.print:
+                self._refresh_if_dirty()
+                self._print()
+            sys.exit(0 if success else 1)
+
+        if opts.print:
+            self._print()
+            sys.exit(0)
+
         self._start_window()
+
+    def _print(self):
+        for dev in self.devs.values():
+            print(f'df: {dev.diskfree}')
+        path_width = self.calc_path_width()
+        mounts_width = self.calc_mounts_width()
+        devs_width = self.calc_devs_width()
+        for row in self.rows:
+            wds = row.path.split('/.snapshots/', maxsplit=1)
+            shown_path = f'  | {wds[1]}' if len(wds) > 1 else row.path
+            mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
+            print(
+                  f'{mount_str:>{mounts_width}}'
+                  f' {row.dev:>{devs_width}}'
+                  f' {shown_path:<{path_width}}')
 
     def _refresh_if_dirty(self):
         if not self.dirty:
@@ -130,7 +157,7 @@ class BTRFS:
                 self.refresh_info()
 
             elif key in (ord('r'), ) and not self.help_mode:
-                self._replace_all_snaps()
+                self._replace_eldest_snaps()
 
             elif key in (ord('s'), ) and not self.help_mode:
                 self._create_snap()
@@ -178,30 +205,62 @@ class BTRFS:
                 sys.exit(15)
             win.clear()
 
-    def _replace_all_snaps(self):
-        """ For every subvolume having snapshots, remove those and create a new snapshot."""
-        def key(subvol_ns):
-            return f'{subvol_ns.dev}{subvol_ns.path}'
+    def _replace_eldest_snaps_of_subvol(self, subvol_ns, ans=None, discard=1):
+        """ For ONE subvolume having snapshots, remove those and create a new snapshot."""
 
-        snaps = []  # all are unique
-        snap_ofs = {} # to remove dups (but set() won't work cuz unhashable)
-        for ns in self.subvol_iter():
-            if ns.snap_of:
-                snaps.append(ns)
-                snap_ofs[key(ns.snap_of)] = ns.snap_of
-        if not snaps:
-            return
+        if not subvol_ns.snaps:
+            return True
 
-        ans = self.win.answer(f'Set snap suffix for {len(snaps)} replacement snaps OR clear',
-                    seed=self._cur_snap_suffix())
-        if not ans:
-            return
+        while discard > 0 and subvol_ns.snaps:
+            if not self._del_subvolume(subvol_ns.snaps[0], ans="y"):
+                return False  # all must succeed
+            subvol_ns.snaps.pop(0)
+            discard -= 1
+        return self._create_snap(subvol_ns, ans=ans)
 
-        for ns in snaps:
-            if not self._del_subvolume(ns, ans="y"):
-                return  # all must succeed
-        for ns in snap_ofs.values():
-            self._create_snap(ns, ans=ans)
+
+    def _replace_eldest_snaps(self, discard=1):
+        """ TBD """
+        ans, total_cnt, success = None, 0, None
+
+        if self.add_limit > 0:
+            ans = self._cur_snap_suffix()
+
+        for _ in (0, 1):
+            for dev_ns in self.devs.values():
+                # pylint: disable=redefined-argument-from-local
+                for subvol_ns in dev_ns.subvols:
+                    if subvol_ns.depth != 0:
+                        continue
+                    if not ans and self.add_limit <= 0:
+                        total_cnt += len(subvol_ns.snaps[:discard])
+                    else:
+                        if self.add_limit > 0:
+                            this_cnt = len(subvol_ns.snaps)
+                            discard = max(0, this_cnt-self.add_limit+1)
+
+                        rv = self._replace_eldest_snaps_of_subvol(subvol_ns,
+                                             ans=ans, discard=discard)
+                        success = rv if success is None else rv if success else False
+            if ans:
+                break
+            if total_cnt == 0:
+                self.win.alert('Sorry, no snapshots found to replace.')
+                break
+            while True:
+                ans = self.win.answer(
+                        f'Set snap suffix for {total_cnt} replacement snaps OR clear',
+                            seed=ans if ans else self._cur_snap_suffix())
+                if ans and (len(ans) < 5 or ans[:1] != '.'
+                            or any(x in ans[1:] for x in './')):
+                    self.win.alert(
+                        'answer must be "." PLUS 4 or more characters w/o any "." or "/"')
+                else:
+                    break
+            if not ans:
+                break
+        return success
+
 
     def _create_snap(self, subvol_ns=None, ans=None):
         if not subvol_ns:
@@ -209,8 +268,7 @@ class BTRFS:
         dev_ns = self.devs[subvol_ns.dev]
         root_ns = dev_ns.subvols[0]
         if root_ns.mount != '/':
-            # TODO: generalize so that we find the root subvolume by
-            #  naming convention?
+            # TODO: generalize so that we find the root subvolume by naming convention?
             self.win.alert('Sorry, no {subvol_ns.dev} is mounted as "/"')
             return False
 
@@ -364,8 +422,8 @@ class BTRFS:
             print('DB: --->>> after mount_tmps()')
             for dev, dev_ns in self.devs.items():
                 print(f'DB: {dev=}: keys={vars(dev_ns).keys()}')
-                for subvol in self.subvol_iter():
-                    print(f'DB:   {"  "*subvol.depth}subvol: {vars(subvol)}')
+            for subvol in self.subvol_iter():
+                print(f'DB:   {"  "*subvol.depth}subvol: {vars(subvol)}')
 
 
     def umount_tmps(self):
@@ -492,24 +550,29 @@ class BTRFS:
             for ns in self.subvol_iter():
                 print(f'DB: {ns.size=} {ns.path=!r}')
 
+    def calc_path_width(self):
+        """ TBD """
+        rv = max([len(x.path) for x in self.rows])
+        return max(len('Subvolume'), rv)
+
+    def calc_mounts_width(self):
+        """ TBD """
+        rv = max([len(x.mount) for x in self.rows])
+        return max(len('Mount'), rv)
+
+    def calc_devs_width(self):
+        """ TBD """
+        rv = max([len(x.dev) for x in self.rows])
+        return max(len('Device'), rv)
 
     def refresh_info(self, body=None):
         """ TBD """
-        def calc_path_width():
-            rv = max([len(x.path) for x in self.rows])
-            return max(len('Subvolume'), rv)
-        def calc_mounts_width():
-            rv = max([len(x.mount) for x in self.rows])
-            return max(len('Mount'), rv)
-        def calc_devs_width():
-            rv = max([len(x.dev) for x in self.rows])
-            return max(len('Device'), rv)
 
         win = self.win
         self._refresh_if_dirty()
-        path_width = calc_path_width()
-        mounts_width = calc_mounts_width()
-        devs_width = calc_devs_width()
+        path_width = self.calc_path_width()
+        mounts_width = self.calc_mounts_width()
+        devs_width = self.calc_devs_width()
 
         win.add_header('MY-SNAPS', attr=cs.A_REVERSE)
         win.add_header(
@@ -551,17 +614,17 @@ if __name__ == "__main__":
             os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
 
         parser = argparse.ArgumentParser()
+        parser.add_argument('-s', '--add-snap-max', type=int, default=0,
+                help='add snapshots limited to value per subvol [1<=val<=8]')
+        parser.add_argument('-p', '--print', action="store_true",
+                help='print the subvolumes/snaps and exit')
         parser.add_argument('--DB', action="store_true",
                 help='add some debugging output')
         opts = parser.parse_args()
+        if opts.add_snap_max > 0:
+            opts.add_snap_max = min(opts.add_snap_max, 8)
+
         btrfs = BTRFS(opts)
-
-        btrfs.refresh_info()
-        if btrfs.snaps:
-            print("snaps (uncorrelated):")
-            for sub in btrfs.snaps.values():
-                print(vars(sub))
-
         btrfs.umount_tmps()
 
     try:
