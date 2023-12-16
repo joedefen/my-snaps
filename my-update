@@ -10,17 +10,17 @@ from datetime import datetime
 from InlineMenu import Menu
 
 update_prompts = {
-    '0': 'my-snaps # replace snaps of root, boot, and home',
-    '1': 'cd /boot; rsync -a efi efi.YYYY-MM-DD # SAVE old EFI',
-    '2': '=== RELEASE UPGRADE to Fedora {NEXT_REL}? ===>>>',
-    '3': 'dnf updateinfo # check what is available',
-    '4': 'dnf upgrade --security --bugfix # OR choose next item',
-    '5': 'dnf upgrade',
-    '6': 'dnf autoremove',
-    '7': 'flatpak update',
-    '8': 'flatpak uninstall --unused; flatpak repair',
-    '9': 'reboot now',
-    'q': '=== QUIT ===',
+    'a': 'my-snaps # replace snaps of root, boot, and home',
+    'b': 'cd /boot; rsync -a efi efi.YYYY-MM-DD # SAVE old EFI',
+    'c': '=== RELEASE UPGRADE to Fedora {NEXT_REL}? ===>>>',
+    'd': 'dnf updateinfo # check what is available',
+    'e': 'dnf upgrade --security --bugfix # OR choose next item',
+    'f': 'dnf upgrade',
+    'g': 'dnf autoremove',
+    'h': 'flatpak update',
+    'i': 'flatpak uninstall --unused; flatpak repair',
+    'j': 'reboot now',
+    'x': '=== EXIT ===',
 }
 
 release_prompts = {
@@ -38,7 +38,7 @@ release_prompts = {
     'l': 'dnf list extras # run next to remove any extras',
     'm': r'dnf remove $(dnf repoquery --extras --exclude=kernel,kernel-\*)',
     'n': 'dnf autoremove',
-    'q': 'QUIT',
+    'x': 'EXIT',
 }
 
 class Update:
@@ -107,13 +107,13 @@ class Update:
         parser.add_argument('-n', '--dry-run', action="store_true",
                 help='do NOT do anything')
         self.opts = parser.parse_args()
-        todo = '0'
+        todo = 'a'
         self._fix_prompts()
         os.system('clear')
         while True:
             menu = Menu(self.prompts, str(todo))
             choice = menu.prompt()
-            if choice == 'q':
+            if choice == 'x':
                 sys.exit(0)
             cmd = self.prompts[choice]
             if 'my-snaps' in cmd:
@@ -130,7 +130,7 @@ class Update:
             todo = chr(ord(choice) + 1)
             if 'RELEASE' in cmd:
                 todo = 'a' # if switched to release_prompts set current to first
-            todo = todo if str(todo) in self.prompts else 'q'
+            todo = todo if str(todo) in self.prompts else 'x'
 
 if __name__ == '__main__':
     Update().main()

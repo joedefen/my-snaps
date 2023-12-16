@@ -32,11 +32,10 @@ Three tools are provided Fedora maintenance assuming you've installed on the def
 * to highlight a line, press its key (on the left) or use the up/down arrow keys
 * after an execution, you will be placed on the next item, but you can easily choose to repeat or skip steps
 </br>
-* executing `0` runs `my-snaps` described below.
-* executing `2` takes you to another menu (shown below)
-* normally, you execute either `4` or `5`
-* if no flatpaks, skip `7` and `8`
-* step `8` need not be done every update, as you wish.
+* executing `a` runs `my-snaps` described below.
+* executing `c` takes you to another menu (shown below)
+* normally, you execute either `e` or `f`
+* if no flatpaks, skip `h` and `j`
 
 Choosing `RELEASE UPGRADE` offers this sub-menu:
 
@@ -56,11 +55,14 @@ Choosing `RELEASE UPGRADE` offers this sub-menu:
 
 * In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separate to remind you of the fields when needed.
 * All snapshots are expected to be in `/.snapshots/`
-* Snapshots are to be named `{subvol}.YYYY-MM-DD-HHmmss` where `YYYY` are time fields separated by dashes or colons only.
-* On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create as many as you wish to keep normally.
-* On subsequent runs, `r` replaces your eldest snapshot for each top-level subvolume that has any snapshots.
+* Snapshots are to be named `{subvol}.YYYY-MM-DD-HHmmss` where `YYYY` are time fields separated by dashes or colons only PLUS and optional "label" that begins with `=`.
+* On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create one.
+* On subsequent runs, `r` replaces your eldest snapshot of the same label for each top-level subvolume that has any snapshots.
   * to describe snapshots, add a short label when prompted (e.g., "=preF40upg").
-  * **note**: you cannot use the characters "." or "/" in the snapshot names/labels
+  * **note**: you cannot use the characters "." or "/" in the snapshot names and labels
+* On subsequent runs, `a` adds one snapshot for each top-level subvolume that has any snapshots.
+
+> **Labels** create sets of snapshots that independently managed. You can create unique labels that are only removed manually.
 
 * Some other keys are:
   * `d`: to remove highlighted subvolume (usually pick a snapshot); you cannot remove mounted subvolumes; if there are nested subvolumes, those are removed too.

@@ -22,11 +22,11 @@ class BtrfsRestore:
 
     def do_command(self, prompts, todo=None, precmd='', once=False, force=False):
         """ TBD"""
-        prompts['q'] = 'QUIT'
+        prompts['x'] = 'EXIT'
         while True:
             menu = Menu(prompts, str(todo) if todo else None)
             choice = menu.prompt()
-            if choice == 'q':
+            if choice == 'x':
                 sys.exit(0)
             cmd = prompts[choice].strip()
             if not cmd.startswith('#'):
@@ -35,7 +35,7 @@ class BtrfsRestore:
                 else:
                     os.system(f'clear;set -x; {precmd} {cmd}')
             todo = chr(ord(choice) + 1)
-            todo = todo if str(todo) in prompts else 'q'
+            todo = todo if str(todo) in prompts else 'x'
             if once:
                 return todo
 
@@ -79,7 +79,7 @@ class BtrfsRestore:
                 cmd += f'mount {fs.path} /mnt # {fs.label}'
             cmds[str(idx)] = cmd
             todo = '0'
-        self.do_command(cmds, todo, once=True, force=True)
+        todo = self.do_command(cmds, todo, once=True, force=True)
 
     def select_restores(self, todo='a'):
         """ TBD """

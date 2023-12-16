@@ -4,7 +4,7 @@
 #
 # by default, it saves up to 4 snapshots created weekly; to vary,
 # pass to arguments:
-#   - the number of snapshots to retain (e.g., 3)
+#   - the number of snapshots to retain (e.g., 3) of the given label
 #   - a description of a past time for the period (e.g., "4 days ago")
 #   - a label (e.g., "=4d-cron")
 # Then create a cronjob that will be run at least once when up normally;

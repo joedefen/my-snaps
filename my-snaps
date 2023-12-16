@@ -17,6 +17,7 @@ starting the window.
 import re
 import os
 import sys
+import copy
 import atexit
 import traceback
 import subprocess
@@ -47,7 +48,7 @@ class BTRFS:
         self.devs = {}
         self.DB = opts.DB
         self.add_limit = opts.add_snap_max
-        self.label = ''
+        self.label = None
         self.help_mode = False
         self.win = None
         self.rows = []
@@ -66,7 +67,7 @@ class BTRFS:
 
         if self.add_limit > 0:
             if opts.label:
-                self.label = opts.label
+                self.label = '=' + opts.label.replace('=', '')
             success = self._replace_eldest_snaps()
             print("OK" if success else "FAIL", f'add_snap_limit={self.add_limit}')
             if success and opts.print:
@@ -138,12 +139,13 @@ class BTRFS:
                     yield from children_iter(subvol_ns, top_down=top_down)
 
     def _cur_snap_suffix(self):
-        return datetime.now().strftime('.%Y-%m-%d-%H%M%S') + self.label
+        return datetime.now().strftime('.%Y-%m-%d-%H%M%S'
+                       ) + '' if self.label is None else self.label
 
     def stop_curses(self):
         """Terminate curses if running."""
         if self.win:
-            self.stop_curses()
+            self.win.stop_curses()
 
     def _start_window(self):
         def do_key(key):
@@ -161,11 +163,19 @@ class BTRFS:
             elif key in (ord('r'), ) and not self.help_mode:
                 self._replace_eldest_snaps()
 
+            elif key in (ord('a'), ) and not self.help_mode:
+                self._replace_eldest_snaps(just_add=True)
+
             elif key in (ord('s'), ) and not self.help_mode:
                 self._create_snap()
 
             elif key in (ord('d'), ) and not self.help_mode:
                 self._del_subvolume()
+
+            elif key in (ord('x'), ) and not self.help_mode:
+                self.stop_curses()
+                print('\n   OK, QUITTING NOW\n')
+                sys.exit(0)
 
             elif key in (cs.KEY_ENTER, 10) and self.help_mode:
                 self.help_mode = False
@@ -180,7 +190,7 @@ class BTRFS:
         spin.add_key('help_mode', '? - toggle help screen', vals=[False, True], obj=self)
 
         base_keys_we_handle=[cs.KEY_ENTER,
-                        10, ord('s'), ord('d'), ord('u'), ord('r')]
+                10, ord('s'), ord('d'), ord('u'), ord('r'), ord('a'), ord('x')]
 
         win = self.win = Window(keys=set(list(spin.keys) + list(base_keys_we_handle)))
 
@@ -193,7 +203,9 @@ class BTRFS:
                 self.win.add_body(' d - delete highlighted item')
                 self.win.add_body(' s - create snapshot for highlighted item')
                 self.win.add_body(' u - compute "du" for all subvols (very slow)')
-                self.win.add_body(' r - refresh all subvols')
+                self.win.add_body(' r - replace eldest snapshot of each subvol')
+                self.win.add_body(' a - add snapshot o each subvol with snapshots')
+                self.win.add_body(' x - exit')
             else:
                 win.set_pick_mode(True)
                 self.refresh_info()
@@ -207,21 +219,23 @@ class BTRFS:
                 sys.exit(15)
             win.clear()
 
-    def _replace_eldest_snaps_of_subvol(self, subvol_ns, ans=None, discard=1):
+    def _replace_eldest_snaps_of_subvol(self, subvol_ns, like_snaps,
+                                        ans=None, discard=1, just_add=False):
         """ For ONE subvolume having snapshots, remove those and create a new snapshot."""
 
         if not subvol_ns.snaps:
             return True
 
-        while discard > 0 and subvol_ns.snaps:
-            if not self._del_subvolume(subvol_ns.snaps[0], ans="y"):
+        while discard > 0 and like_snaps:
+            if not self._del_subvolume(like_snaps[0], ans="y"):
                 return False  # all must succeed
-            subvol_ns.snaps.pop(0)
+            subvol_ns.snaps.remove(like_snaps[0])
+            like_snaps.pop(0)
             discard -= 1
         return self._create_snap(subvol_ns, ans=ans)
 
 
-    def _replace_eldest_snaps(self, discard=1):
+    def _replace_eldest_snaps(self, discard=1, just_add=False):
         """ TBD """
         ans, total_cnt, success = None, 0, None
 
@@ -229,35 +243,47 @@ class BTRFS:
             ans = self._cur_snap_suffix()
 
         for _ in (0, 1):
+            labels = set()
             for dev_ns in self.devs.values():
                 # pylint: disable=redefined-argument-from-local
                 for subvol_ns in dev_ns.subvols:
+                    like_snaps =  []
                     if subvol_ns.depth != 0:
                         continue
-                    if not ans and self.add_limit <= 0:
-                        total_cnt += len(subvol_ns.snaps[:discard])
-                    else:
+                    for snap in subvol_ns.snaps:
+                        if self.label is None or snap.snap_label == self.label:
+                            like_snaps.append(snap)
+                            labels.add(snap.snap_label if snap.snap_label else "''")
+#                   if not ans and self.add_limit <= 0:
+#                       # total_cnt += len(like_snaps[:discard])
+#                       pass
+#                   else:
+                    if ans or self.add_limit > 0:
+                        this_cnt = len(like_snaps)
                         if self.add_limit > 0:
-                            this_cnt = len(subvol_ns.snaps)
                             discard = max(0, this_cnt-self.add_limit+1)
+                        elif just_add:
+                            discard = max(0, this_cnt-8+1)
 
                         rv = self._replace_eldest_snaps_of_subvol(subvol_ns,
-                                             ans=ans, discard=discard)
+                                         like_snaps, ans=ans, discard=discard)
                         success = rv if success is None else rv if success else False
+                        self.label = None
             if ans:
                 break
-            if total_cnt == 0:
-                self.win.alert('Sorry, no snapshots found to replace.')
-                break
+#           if total_cnt == 0:
+#               self.win.alert('Sorry, no snapshots found to replace.')
+#               break
             while True:
                 ans = self.win.answer(
-                        f'Set snap suffix for {total_cnt} replacement snaps OR clear',
+                        f'Set snap suffix OR clear; labels: {",".join(list(labels))}',
                             seed=ans if ans else self._cur_snap_suffix())
                 if ans and (len(ans) < 5 or ans[:1] != '.'
                             or any(x in ans[1:] for x in './')):
                     self.win.alert(
                         'answer must be "." PLUS 4 or more characters w/o any "." or "/"')
                 else:
+                    self.label = self._get_label(ans)
                     break
             if not ans:
                 break
@@ -386,7 +412,8 @@ class BTRFS:
         """ Create a subvolume namespace"""
         return SimpleNamespace(dev=dev, path=path,
                size=None, depth=0, mount='', snaps=[],
-                snap_of=None, children=[], ident=ident, parent=parent)
+                children=[], snap_label='', snap_of=None,
+                ident=ident, parent=parent)
 
     def _mount_tmps(self):
         """ mount each btrfs as needed """
@@ -465,6 +492,14 @@ class BTRFS:
                 if subvol.mount:
                     print(f'DB:   {subvol.dev=} {subvol.mount=} {subvol.path=}')
 
+    
+    @staticmethod
+    def _get_label(string):
+        wds = string.rsplit('=', maxsplit=1)
+        if len(wds) > 1:
+            return f'={wds[1]}'
+        return ''
+
     def gather_snapshots(self):
         """ TBD """
         for subvol in self.subvol_iter():
@@ -475,12 +510,15 @@ class BTRFS:
             if not mat:
                 continue
             of_path = f'/{mat.group(1)}'
+            remainder = wds[1][len(of_path):] # everything after the .
             dev_ns = self.devs[subvol.dev]
             of_subvol = dev_ns.paths.get(of_path, None)
             if of_subvol:
                 of_subvol.snaps.append(subvol)
                 of_subvol.snaps = sorted(of_subvol.snaps, key=lambda x: x.path)
                 subvol.snap_of = of_subvol
+                subvol.snap_label = self._get_label(remainder)
+
         if self.DB:
             print('DB: --->>> after gather_snapshots()')
             for subvol in self.subvol_iter():
@@ -578,7 +616,7 @@ class BTRFS:
 
         win.add_header('MY-SNAPS', attr=cs.A_REVERSE)
         win.add_header(
-            '  s:+snap  d:-subvol  u:disk-usage  r:replace-all  Ctrl-C:quit  ?:help',
+            '  s:+snap d:-subvol u:disk-usage r:replace-all a:add-all x:exit ?:help',
             resume=True)
         for dev_ns in self.devs.values():
             win.add_header(f'df: {dev_ns.diskfree}')
