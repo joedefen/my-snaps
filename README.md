@@ -3,7 +3,7 @@
 
 ## Introduction
 Three tools are provided Fedora maintenance assuming you've installed on the default BTRFS:
-* `my-upgrade` steps you through updating the current point release or upgrading to the next major point release. `my-upgrade` is very much Fedora specific and does not require you to use `my-snaps` although integrated.
+* `my-update` steps you through updating the current point release or upgrading to the next major point release. `my-update` is very much Fedora specific and does not require you to use `my-snaps` although integrated.
 * `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates). You can schedule period snapshots with the additional tool, `my-snaps-cronjob`.
 * `my-restore` assists restoring snapshots to back out changes to the system
 * `my-snaps` and `my-restore` are not necessarily Fedora specific, but you may need to adjust a few instructions to use them elsewhere.
@@ -23,8 +23,8 @@ Three tools are provided Fedora maintenance assuming you've installed on the def
 
 ---
 
-## my-upgrade
-`my-upgrade` steps you through upgrading your system. Its main screen looks like this:
+## my-update
+`my-update` steps you through updating your system. Its main screen looks like this:
 
 ![my-update-p1.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-update-p1.png?raw=true)
 * *if you cannot see the full menu, enlarge the window else navigation is confusing*
@@ -41,7 +41,7 @@ Choosing `RELEASE UPGRADE` offers this sub-menu:
 
 ![my-update-p2.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-update-p2.png?raw=true)
 
-* `b` and `e` cause reboots; note the reboot step, re-run `my-upgrade`, and navigate to the next step.
+* `b` and `e` cause reboots; note the reboot step, re-run `my-update`, and navigate to the next step in the upgrade.
 * `g` and beyond are "advanced steps" and somewhat optional.
 * if there are "unsatisfied" packages, use a separate window to erase them if you please
 * See [Upgrading Fedora Using DNF System Plugin :: Fedora Docs](https://docs.fedoraproject.org/en-US/quick-docs/upgrading-fedora-offline/) for more details.
@@ -123,7 +123,7 @@ Personally, I place `/boot` within my root BTRFS partition (although not a Fedor
 
 **But, if /boot is a separate ext4 partition, there are greater chances of a restore not working.** Generally, when you restore an older snapshot (especially one you just created), its Linux version will still be present ... so, in the boot menu, if the newer OS version will not boot, iteratively try older versions until one works.  In the worst case, you'll need to do a **boot repair**; search for "*Restoring the bootloader using the Live disk*" in [Fedora Linux User Documentation :: Fedora Docs](https://docs.fedoraproject.org/en-US/fedora/latest/).
 
-As part of `my-upgrade`, it copies `/boot/efi` (the UEFI boot partition) to `/boot/efi.{date}` and removes old versions. In some cases, that might help repair `/boot/efi`; but if not, the boot repair from the Live disk procedure is the definitive fix.
+As part of `my-update`, it copies `/boot/efi` (the UEFI boot partition) to `/boot/efi.{date}` and removes old versions. In some cases, that might help repair `/boot/efi`; but if not, the boot repair from the Live disk procedure is the definitive fix.
 
 ---
 
@@ -150,3 +150,7 @@ If there are issues, ensure snapshots are in `/.snapshots` and they are named `{
 * BTW, the above complementary strategies have even more value if you have multiple installs (e.g., a desktop, a 24/7 server, and a few laptops all running similarly with the same apps an basic config).
 * For more comprehensive protection, consider `snapper`, `btrbk`, `btrfsmaintenance`, and google for others.
 
+---
+
+## BONUS: There is an Update Menu for EndeavourOS, too
+When `my-update` runs on an EndeavorOS system, a different menu appears that is appropriate for EndeavorOS. It assumes that you've install `yay` as your AUR helper tool.  The maintence steps are those suggested in the EndeavorOS docs; note, that some of the steps are only needed infequently, perhaps months, if you wish to skip them sometimes.  And since EndeavourOS is a rolling release, there is only one menu since every update is the same.

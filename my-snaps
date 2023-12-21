@@ -248,7 +248,7 @@ class BTRFS:
                 # pylint: disable=redefined-argument-from-local
                 for subvol_ns in dev_ns.subvols:
                     like_snaps =  []
-                    if subvol_ns.depth != 0:
+                    if subvol_ns.depth != 0 or not subvol_ns.mount:
                         continue
                     for snap in subvol_ns.snaps:
                         if self.label is None or snap.snap_label == self.label:

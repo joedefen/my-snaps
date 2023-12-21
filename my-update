@@ -3,13 +3,14 @@
 My upgrade script.
 """
 # pylint: disable=import-outside-toplevel,invalid-name
+# pylint: disable=too-many-branches
 
 import os
 import sys
 from datetime import datetime
 from InlineMenu import Menu
 
-update_prompts = {
+fed_update_prompts = { # Fedora ordinary update
     'a': 'my-snaps # replace snaps of root, boot, and home',
     'b': 'cd /boot; rsync -a efi efi.YYYY-MM-DD # SAVE old EFI',
     'c': '=== RELEASE UPGRADE to Fedora {NEXT_REL}? ===>>>',
@@ -23,7 +24,7 @@ update_prompts = {
     'x': '=== EXIT ===',
 }
 
-release_prompts = {
+fed_release_prompts = { # Fedora release upgrade
     'a': 'dnf upgrade --refresh',
     'b': 'reboot now # RETURN to next item after reboot',
     'c': 'dnf install dnf-plugin-system-upgrade',
@@ -41,23 +42,40 @@ release_prompts = {
     'x': 'EXIT',
 }
 
+end_update_prompts = {  # EndeavorOS update (rolling release)
+    'a': 'my-snaps                   # replace snaps of root, home, etc',
+    'b': 'reflector-simple           # update Arch mirrors',
+    'c': 'eos-rankmirrors            # update EndeavourOS mirrors',
+#   '-': 'sudo pacman -Syu archlinux-keyring # update everything',
+    'd': 'eos-update --yay           # endeavor OS update',
+#   '-': 'yay -Syyu # update AUR packages',
+    'e': 'sudo paccache -rk1; sudo paccache -ruk0',
+    'f': 'sudo pacman -Rns $(pacman -Qdtq) # remove orphans',
+    'g': 'flatpak update',
+    'h': 'flatpak uninstall --unused; flatpak repair',
+    'i': 'journalctl --vacuum-time=2weeks',
+    'j': 'reboot now',
+    'x': '=== EXIT ===',
+}
+
 class Update:
     """TBD"""
     here = None
     yyyy_mm_dd = None
 
     def __init__(self):
-        if os.geteuid() != 0: # Re-run the script with sudo
-            print('NOTE: restarting with "sudo"')
-            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
         Update.here = os.path.dirname(os.path.abspath(__file__))
         Update.yyyy_mm_dd = datetime.now().strftime("%Y-%m-%d")
-        self.version = self._get_release()
+        self.os_name, self.version = self._get_release()
         self.opts = None
-        self.prompts = update_prompts
+        self.prompts = None
+        if self.os_name.startswith('Fed') and os.geteuid() != 0:
+            # Re-run the script with sudo
+            print('NOTE: restarting with "sudo"')
+            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
 
     def _get_release(self):
-        rv, is_fedora = '', False
+        name, rv = '', '0'
         lines = []
         with open('/etc/os-release', 'r', encoding='UTF-8') as file:
             lines = file.read().splitlines()
@@ -67,18 +85,20 @@ class Update:
                 continue
             kw, val = wds[0], wds[1].strip('"')
             if kw == 'NAME':
-                is_fedora = bool(val.startswith('Fedora'))
+                name = val
             elif kw == 'VERSION_ID':
                 rv = int(val)
-        assert is_fedora, '/etc/os-release does not suggest Fedora?'
-        assert rv, '/etc/os-release does not have Fedora Version?'
+        if name.startswith('End'):
+            return name, rv
+        assert name.startswith('Fed'), '/etc/os-release does not suggest Fedora?'
+        assert rv, "/etc/os-release does not have Fedora's VERSION_ID?"
         print(f'NOTE: on Fedora {rv}')
-        return rv
+        return name, rv
 
     def _fix_prompts(self):
         ver = self.version
         for key, prompt in self.prompts.items():
-            self.prompts[key] = prompt.replace('{NEXT_REL}', str(ver+1)).replace(
+            self.prompts[key] = prompt.replace('{NEXT_REL}', str(int(ver)+1)).replace(
                                 'YYYY-MM-DD', Update.yyyy_mm_dd)
 
     def run_cmd(self, cmd, precmd=None):
@@ -108,29 +128,48 @@ class Update:
                 help='do NOT do anything')
         self.opts = parser.parse_args()
         todo = 'a'
-        self._fix_prompts()
         os.system('clear')
-        while True:
-            menu = Menu(self.prompts, str(todo))
-            choice = menu.prompt()
-            if choice == 'x':
-                sys.exit(0)
-            cmd = self.prompts[choice]
-            if 'my-snaps' in cmd:
-                self.run_cmd(cmd=f'{self.here}/my-snaps')
-            elif '/boot' in cmd:
-                precmd="cd /boot; rm -rf efi.????-??-??"
-                self.run_cmd(cmd, precmd)
-            elif 'RELEASE' in cmd:
-                self.prompts = release_prompts
-                self._fix_prompts()
-            else:
-                self.run_cmd(cmd)
+        if self.os_name.startswith('Fed'):
+            self.prompts = fed_update_prompts
+            self._fix_prompts()
+            while True:
+                menu = Menu(self.prompts, str(todo))
+                choice = menu.prompt()
+                if choice == 'x':
+                    sys.exit(0)
+                cmd = self.prompts[choice]
+                if 'my-snaps' in cmd:
+                    self.run_cmd(cmd=f'{self.here}/my-snaps')
+                elif '/boot' in cmd:
+                    precmd="cd /boot; rm -rf efi.????-??-??"
+                    self.run_cmd(cmd, precmd)
+                elif 'RELEASE' in cmd:
+                    self.prompts = fed_release_prompts
+                    self._fix_prompts()
+                else:
+                    self.run_cmd(cmd)
 
-            todo = chr(ord(choice) + 1)
-            if 'RELEASE' in cmd:
-                todo = 'a' # if switched to release_prompts set current to first
-            todo = todo if str(todo) in self.prompts else 'x'
+                todo = chr(ord(choice) + 1)
+                if 'RELEASE' in cmd:
+                    todo = 'a' # if switched to fed_release_prompts set current to first
+                todo = todo if str(todo) in self.prompts else 'x'
+
+        elif self.os_name.startswith('End'):
+            self.prompts = end_update_prompts
+            self._fix_prompts()
+            while True:
+                menu = Menu(self.prompts, str(todo))
+                choice = menu.prompt()
+                if choice == 'x':
+                    sys.exit(0)
+                cmd = self.prompts[choice]
+                if 'my-snaps' in cmd:
+                    self.run_cmd(cmd=f'{self.here}/my-snaps')
+                else:
+                    self.run_cmd(cmd)
+
+                todo = chr(ord(choice) + 1)
+                todo = todo if str(todo) in self.prompts else 'x'
 
 if __name__ == '__main__':
     Update().main()
