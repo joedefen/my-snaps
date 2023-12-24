@@ -54,7 +54,7 @@ end_update_prompts = {  # EndeavorOS update (rolling release)
     'g': 'flatpak update',
     'h': 'flatpak uninstall --unused; flatpak repair',
     'i': 'journalctl --vacuum-time=2weeks',
-    'j': 'reboot now',
+    'j': 'sudo reboot now',
     'x': '=== EXIT ===',
 }
 
