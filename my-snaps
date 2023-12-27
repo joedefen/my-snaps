@@ -46,6 +46,7 @@ class BTRFS:
         self.tmp_dir = '/tmp/.btrfs/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
         self.devs = {}
+        self.snap_subvol = None
         self.DB = opts.DB
         self.add_limit = opts.add_snap_max
         self.label = None
@@ -294,11 +295,11 @@ class BTRFS:
         if not subvol_ns:
             subvol_ns = self.rows[self.win.pick_pos].subvol_ns
         dev_ns = self.devs[subvol_ns.dev]
-        root_ns = dev_ns.subvols[0]
-        if root_ns.mount != '/':
-            # TODO: generalize so that we find the root subvolume by naming convention?
-            self.win.alert('Sorry, no {subvol_ns.dev} is mounted as "/"')
-            return False
+#       root_ns = dev_ns.subvols[0]
+#       if root_ns.mount != '/':
+#           # TODO: generalize so that we find the root subvolume by naming convention?
+#           self.win.alert('Sorry, no {subvol_ns.dev} is mounted as "/"')
+#           return False
 
         if subvol_ns.snap_of:
             self.win.alert('Sorry, cannot create snapshot of snapshot')
@@ -315,10 +316,10 @@ class BTRFS:
         if not ans:
             return False
 
-        snap_dir = f'{dev_ns.tmp_path}{root_ns.path}/.snapshots'
+        snap_dir = f'{dev_ns.tmp_path}{self.snap_subvol.path}'
         snap_path = f'{snap_dir}{subvol_ns.path}{ans}'
-        if not os.path.isdir(snap_dir):
-            os.makedirs(snap_dir)
+#       if not os.path.isdir(snap_dir):
+#           os.makedirs(snap_dir)
 
         cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
         out, err, code = self._slurp_command(cmd)
@@ -481,6 +482,8 @@ class BTRFS:
             for subvol in self.subvol_iter():
                 if subvol.ident == ident:
                     subvol.mount = mount
+                    if mount == '/.snapshots':
+                        self.snap_subvol = subvol
                     break
         for dev_ns in self.devs.values():
             dev_ns.subvols = sorted(dev_ns.subvols,
@@ -491,6 +494,7 @@ class BTRFS:
             for subvol in self.subvol_iter():
                 if subvol.mount:
                     print(f'DB:   {subvol.dev=} {subvol.mount=} {subvol.path=}')
+        assert self.snap_subvol, "cannot find mounted /.snapshots"
 
     
     @staticmethod
@@ -502,8 +506,9 @@ class BTRFS:
 
     def gather_snapshots(self):
         """ TBD """
+
         for subvol in self.subvol_iter():
-            wds = subvol.path.split('/.snapshots/', maxsplit=1)
+            wds = subvol.path.split('@snapshots/', maxsplit=1)
             if len(wds) < 2:
                 continue
             mat = re.match(r'^(.*)\.[\-\d\:]+', wds[1])
