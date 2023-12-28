@@ -95,7 +95,7 @@ class BtrfsRestore:
                 continue
             subpath = mat.group(1)
             wds = subpath.split('/')
-            if len(wds) > 1 and wds[-2].startswith('.snapshots'):
+            if len(wds) > 1 and wds[-2].endswith('@snapshots'):
                 try:
                     subvol, _ = wds[-1].rsplit('.', maxsplit=1)
                     snaps[subpath] = subvol
@@ -110,27 +110,27 @@ class BtrfsRestore:
             subvol = snaps[snap_path]
             if subvol in skips:
                 continue
-            has_old = os.path.exists(f'{subvol}.old')
-            has_new = os.path.exists(f'{subvol}.new')
+            has_old = os.path.exists(f'{subvol}.OLD')
+            has_new = os.path.exists(f'{subvol}.NEW')
             if not os.path.exists(f'{subvol}'):
                 cmds[str(idx)] = f'# ERR: {subvol} does NOT exist'
                 skips.add(subvol)
             elif has_old and has_new:
-                cmds[str(idx)] = f'# ERR: {subvol}.old AND {subvol}.new exists'
+                cmds[str(idx)] = f'# ERR: {subvol}.OLD AND {subvol}.NEW exists'
                 skips.add(subvol)
-            elif os.path.exists(f'{subvol}.old'):
+            elif os.path.exists(f'{subvol}.OLD'):
                 cmds[str(idx)] = (f'echo RE-RESTORE "{subvol}" && '
-                    f'mv "{subvol}" "{subvol}.new" && mv "{subvol}.old" "{subvol}"')
+                    f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"')
                 skips.add(subvol)
-            elif os.path.exists(f'{subvol}.new'):
+            elif os.path.exists(f'{subvol}.NEW'):
                 cmds[str(idx)] = (f'echo UN-RESTORE "{subvol}" && '
-                    f'mv "{subvol}" "{subvol}.old" && mv "{subvol}.new" "{subvol}"')
+                    f'mv "{subvol}" "{subvol}.OLD" && mv "{subvol}.NEW" "{subvol}"')
                 skips.add(subvol)
             else:
                 basename = os.path.basename(snap_path)
                 cmds[idx] = (f'echo RESTORE "{basename}" && '
-                    f'btrfs sub snap "{snap_path}" "{subvol}.old" && '
-                        + f'mv "{subvol}" "{subvol}.new" && mv "{subvol}.old" "{subvol}"')
+                    f'btrfs sub snap "{snap_path}" "{subvol}.OLD" && '
+                        + f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"')
             idx = chr(ord(idx) + 1)
         cmds[idx] = 'reboot now'
         return self.do_command(cmds, once=True, todo=todo)
