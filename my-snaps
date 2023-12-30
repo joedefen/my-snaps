@@ -17,7 +17,6 @@ starting the window.
 import re
 import os
 import sys
-import copy
 import atexit
 import traceback
 import subprocess
@@ -54,6 +53,7 @@ class BTRFS:
         self.win = None
         self.rows = []
         self.dirty = True # TBD: need to refresh knowledge
+        self.show_size = False # until we calc disk usage
 
         self.blkid_lines = [] # to avoid rerunning "blkid" on refresh
         self.mounts_lines = [] # to avoid rereading "/proc/mounts" on refresh
@@ -307,6 +307,10 @@ class BTRFS:
 
         if not subvol_ns.mount:
             self.win.alert('Sorry, cannot create snapshot of unmounted subvolume')
+            return False
+
+        if subvol_ns.mount == '/.snapshots':
+            self.win.alert('Sorry, cannot create snapshot of snapshot subvolume')
             return False
 
         if not ans:
@@ -571,24 +575,30 @@ class BTRFS:
                 val = 0
             return int(round(val))
 
-        for dev_ns in self.devs.values():
-            lines, _, _ = self._slurp_command(
-                f'cd "{dev_ns.tmp_path}" && btrfs fi du -s */.snapshots/*')
-            for line in lines[1:]:
-                total, exclusive, _, pathname = re.split(r'\s+', line.strip(), maxsplit=3)
-                pathname = os.path.join('/', pathname)
-                if not pathname in dev_ns.paths:
-                    continue
-                snap_ns = dev_ns.paths[pathname]
-                snap_ns.size = convert_human(exclusive)
-                if snap_ns.snap_of:
-                    if not snap_ns.snap_of.size:
-                        snap_ns.snap_of.size = 0
-                    snap_ns.snap_of.size = max(convert_human(total),
-                        snap_ns.snap_of.size)
+        if not self.snap_subvol:
+            return
+        dev_ns = self.devs.get(self.snap_subvol.dev, None)
+        if not dev_ns:
+            return
+
+        cmd = f'cd "{dev_ns.tmp_path}" && btrfs fi du -s {self.snap_subvol.path[1:]}/*'
+        lines, _, _ = self._slurp_command(cmd)
+        for line in lines[1:]:
+            total, exclusive, _, pathname = re.split(r'\s+', line.strip(), maxsplit=3)
+            pathname = os.path.join('/', pathname)
+            if not pathname in dev_ns.paths:
+                continue
+            snap_ns = dev_ns.paths[pathname]
+            snap_ns.size = convert_human(exclusive)
+            if snap_ns.snap_of:
+                if not snap_ns.snap_of.size:
+                    snap_ns.snap_of.size = 0
+                snap_ns.snap_of.size = max(convert_human(total),
+                    snap_ns.snap_of.size)
 
         for row in self.rows:
             row.size = row.subvol_ns.size
+        self.show_size = True
 
         if self.DB:
             print('DB: --->>> after _get_disk_usage()')
@@ -625,9 +635,10 @@ class BTRFS:
             resume=True)
         for dev_ns in self.devs.values():
             win.add_header(f'df: {dev_ns.diskfree}')
+        size_hdr = f' {"~Size":>7}'
         win.add_header(
               f'{"Mount":>{mounts_width}}'
-              f' {"~Size":>7}'
+              f'{size_hdr if self.show_size else ""}'
               f' {"Device":>{devs_width}}'
               f' {"Subvolume":<{path_width}}',
               attr=cs.A_BOLD,
@@ -640,12 +651,13 @@ class BTRFS:
             return
 
         for row in self.rows:
-            wds = row.path.split('/.snapshots/', maxsplit=1)
-            shown_path = f'  | {wds[1]}' if len(wds) > 1 else row.path
+            wds = row.path.split('@snapshots/', maxsplit=1)
+            shown_path = f'--> {wds[1]}' if len(wds) > 1 else row.path
             mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
+            size_str = f' {"-" if row.size is None else human(row.size):>7}'
             win.add_body(
                   f'{mount_str:>{mounts_width}}'
-                  f' {"-" if row.size is None else human(row.size):>7}'
+                  f'{size_str if self.show_size else ""}'
                   f' {row.dev:>{devs_width}}'
                   f' {shown_path:<{path_width}}')
 
