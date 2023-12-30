@@ -141,7 +141,7 @@ class BTRFS:
 
     def _cur_snap_suffix(self):
         return datetime.now().strftime('.%Y-%m-%d-%H%M%S'
-                       ) + '' if self.label is None else self.label
+                       ) + ('' if self.label is None else self.label)
 
     def stop_curses(self):
         """Terminate curses if running."""
@@ -248,6 +248,8 @@ class BTRFS:
             for dev_ns in self.devs.values():
                 # pylint: disable=redefined-argument-from-local
                 for subvol_ns in dev_ns.subvols:
+                    if subvol_ns == self.snap_subvol:
+                        continue
                     like_snaps =  []
                     if subvol_ns.depth != 0 or not subvol_ns.mount:
                         continue
@@ -510,6 +512,12 @@ class BTRFS:
 
     def gather_snapshots(self):
         """ TBD """
+        def link(of_subvol, subvol):
+            if of_subvol and subvol:
+                of_subvol.snaps.append(subvol)
+                of_subvol.snaps = sorted(of_subvol.snaps, key=lambda x: x.path)
+                subvol.snap_of = of_subvol
+                subvol.snap_label = self._get_label(remainder)
 
         for subvol in self.subvol_iter():
             wds = subvol.path.split('@snapshots/', maxsplit=1)
@@ -517,16 +525,16 @@ class BTRFS:
                 continue
             mat = re.match(r'^(.*)\.[\-\d\:]+', wds[1])
             if not mat:
+                link(self.snap_subvol, subvol)
                 continue
             of_path = f'/{mat.group(1)}'
             remainder = wds[1][len(of_path):] # everything after the .
             dev_ns = self.devs[subvol.dev]
             of_subvol = dev_ns.paths.get(of_path, None)
             if of_subvol:
-                of_subvol.snaps.append(subvol)
-                of_subvol.snaps = sorted(of_subvol.snaps, key=lambda x: x.path)
-                subvol.snap_of = of_subvol
-                subvol.snap_label = self._get_label(remainder)
+                link(of_subvol, subvol)
+            else:
+                link(self.snap_subvol, subvol)
 
         if self.DB:
             print('DB: --->>> after gather_snapshots()')
@@ -653,6 +661,8 @@ class BTRFS:
         for row in self.rows:
             wds = row.path.split('@snapshots/', maxsplit=1)
             shown_path = f'--> {wds[1]}' if len(wds) > 1 else row.path
+            if row.subvol_ns.snap_of == self.snap_subvol:
+                shown_path = '!!!' + shown_path[3:]
             mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
             size_str = f' {"-" if row.size is None else human(row.size):>7}'
             win.add_body(
