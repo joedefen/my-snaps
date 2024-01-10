@@ -53,7 +53,7 @@ end_update_prompts = {  # EndeavorOS update (rolling release)
     'f': 'sudo pacman -Rns $(pacman -Qdtq) # remove orphans',
     'g': 'flatpak update',
     'h': 'flatpak uninstall --unused; flatpak repair',
-    'i': 'journalctl --vacuum-time=2weeks',
+    'i': 'sudo journalctl --vacuum-time=2weeks',
     'j': 'sudo reboot now',
     'x': '=== EXIT ===',
 }

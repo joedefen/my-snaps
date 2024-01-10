@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""
+My unstash homed script to keep out of trouble
+"""
+# pylint: disable=import-outside-toplevel,invalid-name
+# pylint: disable=too-many-branches
+
+import os
+import sys
+from InlineMenu import Menu
+
+prompts = { # Fedora ordinary update
+    'a': 'homed checkout -p stash # answer "a" for whole file',
+    'b': 'homed stash clear',
+    'x': '=== EXIT ===',
+}
+class Update:
+    """TBD"""
+    here = None
+
+    def __init__(self):
+        Update.here = os.path.dirname(os.path.abspath(__file__))
+        self.opts = None
+        self.prompts = None
+
+    def run_cmd(self, cmd, precmd=None):
+        """Run a command and option prior command
+           - clear the screen first
+           - if dry run, clear the screen first
+         """
+        echo = 'echo WOULD +' if self.opts.dry_run else 'set -x; '
+        os.system('clear')
+        if self.opts.dry_run:
+            cmd = f'{cmd!r}'
+            precmd = f'{precmd!r}' if precmd else None
+        if precmd:
+            print(f'1 ---- {echo} {precmd!r}')
+            os.system(f'{echo} {precmd}')
+            print(f'2 ---- {echo} {cmd!r}')
+            os.system(f'{echo} {cmd}')
+        else:
+            print(f'3 ---- {echo} {cmd!r}')
+            os.system(f'{echo} {cmd}')
+
+    def main(self):
+        """TDB"""
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-n', '--dry-run', action="store_true",
+                help='do NOT do anything')
+        self.opts = parser.parse_args()
+        todo = 'a'
+        os.system('clear')
+        self.prompts = prompts
+        while True:
+            menu = Menu(self.prompts, str(todo))
+            choice = menu.prompt()
+            if choice == 'x':
+                sys.exit(0)
+            cmd = self.prompts[choice]
+            self.run_cmd(cmd)
+
+            todo = chr(ord(choice) + 1)
+            todo = todo if str(todo) in self.prompts else 'x'
+
+if __name__ == '__main__':
+    Update().main()
