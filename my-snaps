@@ -16,6 +16,7 @@ starting the window.
 
 import re
 import os
+import time
 import sys
 import atexit
 import traceback
@@ -36,6 +37,28 @@ def human(number):
         if number < 99.95 or not suffixes:
             return f'{number:.1f}{suffix}'
     return None
+
+##############################################################################
+##   Turn time differences in seconds to a compact representation;
+##   e.g., '18h·39m'
+##############################################################################
+def ago_str(delta_secs, signed=False):
+    """TBD"""
+    ago = int(max(0, round(delta_secs if delta_secs >= 0 else -delta_secs)))
+    divs = (60, 60, 24, 7, 52, 9999999)
+    units = ('s', 'm', 'h', 'd', 'w', 'y')
+    vals = (ago%60, int(ago/60)) # seed with secs, mins (step til 2nd fits)
+    uidx = 1 # best units
+    for div in divs[1:]:
+        # print('vals', vals, 'div', div)
+        if vals[1] < div:
+            break
+        vals = (vals[1]%div, int(vals[1]/div))
+        uidx += 1
+    rv = '-' if signed and delta_secs < 0 else ''
+    rv += f'{vals[1]}{units[uidx]}' if vals[1] else ''
+    rv += f'{vals[0]:d}{units[uidx-1]}'
+    return rv
 
 ##############################################################################
 
@@ -420,7 +443,7 @@ class BTRFS:
         return SimpleNamespace(dev=dev, path=path,
                size=None, depth=0, mount='', snaps=[],
                 children=[], snap_label='', snap_of=None,
-                ident=ident, parent=parent)
+                ident=ident, parent=parent, ago_str='')
 
     def _mount_tmps(self):
         """ mount each btrfs as needed """
@@ -454,6 +477,11 @@ class BTRFS:
                     dev_ns.subvols.append(child)
                 dev_ns.idents[ident] = child
                 dev_ns.paths[path] = child
+                mat = re.search(r'\b(\d\d\d\d-\d\d-\d\d-\d\d\d\d\d\d)\b', child.path)
+                if mat:
+                    dt_object = datetime.strptime(mat.group(1), "%Y-%m-%d-%H%M%S")
+                    child.ago_str = ago_str(time.time() - dt_object.timestamp())
+
         if self.DB:
             print('DB: --->>> after mount_tmps()')
             for dev, dev_ns in self.devs.items():
@@ -660,7 +688,12 @@ class BTRFS:
 
         for row in self.rows:
             wds = row.path.split('@snapshots/', maxsplit=1)
-            shown_path = f'--> {wds[1]}' if len(wds) > 1 else row.path
+            if len(wds) < 2:
+                shown_path = row.path
+            else:
+                shown_path = f'--> {wds[1]}'
+                if row.subvol_ns.ago_str:
+                    shown_path += f' {row.subvol_ns.ago_str}'
             if row.subvol_ns.snap_of == self.snap_subvol:
                 shown_path = '!!!' + shown_path[3:]
             mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
