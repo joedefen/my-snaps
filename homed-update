@@ -10,8 +10,12 @@ import sys
 from InlineMenu import Menu
 
 prompts = { # Fedora ordinary update
-    'a': 'homed checkout -p stash # answer "a" for whole file',
-    'b': 'homed stash clear',
+    'a': 'homed status',
+    'b': 'homed stash; homed stash show --name-only >/tmp/.hd-chgs',
+    'c': 'homed pull',
+    'd': 'homed checkout -p stash $(cat /tmp/.hd-chgs) # "a" for whole file',
+    'e': 'homed reset --hard HEAD; homed pull # cleanup IF NEEDED',
+    'g': 'homed stash clear',
     'x': '=== EXIT ===',
 }
 class Update:
@@ -22,6 +26,9 @@ class Update:
         Update.here = os.path.dirname(os.path.abspath(__file__))
         self.opts = None
         self.prompts = None
+        home_directory = os.path.expanduser("~")
+        os.chdir(home_directory)
+
 
     def run_cmd(self, cmd, precmd=None):
         """Run a command and option prior command
