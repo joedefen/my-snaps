@@ -14,9 +14,9 @@ prompts = { # Fedora ordinary update
     'b': 'homed stash; homed stash show --name-only >/tmp/.hd-chgs',
     'c': 'homed pull',
     'd': 'homed checkout -p stash $(cat /tmp/.hd-chgs) # "a" for whole file',
-    'e': 'homed reset --hard HEAD; homed pull # cleanup IF NEEDED',
-    'g': 'homed stash clear',
+    'e': 'homed stash clear',
     'x': '=== EXIT ===',
+    'z': 'homed reset --hard HEAD; homed pull # cleanup IF NEEDED',
 }
 class Update:
     """TBD"""
