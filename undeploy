@@ -3,7 +3,7 @@
 DEST=/usr/local/bin
 # HERE="$(dirname "$(readlink -f "$0")")"
 
-for x in my-update my-snaps my-restore my-snaps-cronjob homed-update; do
+for x in my-snaps my-restore my-snaps-cronjob; do
     (set -x; sudo rm -f "$DEST/$x")
     # sudo ln -s "$HERE/$x" "$DEST/$x"
 done
