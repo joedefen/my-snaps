@@ -4,7 +4,7 @@
 DEST=/usr/local/bin
 HERE="$(dirname "$(readlink -f "$0")")"
 
-for x in my-snaps my-restore my-snaps-cronjob; do
+for x in my-snaps my-restore; do
     sudo rm -f "$DEST/$x"
     (set -x; sudo ln -s "$HERE/$x" "$DEST/$x")
 done
