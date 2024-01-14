@@ -1,10 +1,8 @@
-# jdef-fedora-tools README
-> Basic upgrade and BTRFS tools for Fedora
+# snap-tools README
+> Tools for managing Btrfs snapshots
 
-## Introduction
-Three tools are provided Fedora maintenance assuming you've installed on the default BTRFS:
-* `my-update` steps you through updating the current point release or upgrading to the next major point release. `my-update` is very much Fedora specific and does not require you to use `my-snaps` although integrated.
-* `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates). You can schedule period snapshots with the additional tool, `my-snaps-cronjob`.
+* `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates).
+* You can schedule period snapshots with the additional tool, `daily-snaps`.
 * `my-restore` assists restoring snapshots to back out changes to the system
 * `my-snaps` and `my-restore` are not necessarily Fedora specific, but you may need to adjust a few instructions to use them elsewhere.
 
@@ -12,8 +10,8 @@ Three tools are provided Fedora maintenance assuming you've installed on the def
 ```
   sudo dnf install git  # also, python 3.8 or later is required
   cd ~  # or anywhere desired (e.g., ~/Projects)
-  git clone https://github.com/joedefen/jdef-fedora-tools.git
-  ./jdef-fedora-tools/deploy  # NOTE: use "undeploy" script to reverse an install
+  git clone https://github.com/joedefen/update-tools.git
+  ./update-tools/deploy  # NOTE: use "undeploy" script to reverse an install
 ```
 * you must keep the source directory (`deploy` creates symbolic links to the tools).
 * within the source directory, run `git pull` to update to the latest
@@ -23,41 +21,19 @@ Three tools are provided Fedora maintenance assuming you've installed on the def
 
 ---
 
-## my-update
-`my-update` steps you through updating your system. Its main screen looks like this:
-
-![my-update-p1.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-update-p1.png?raw=true)
-* *if you cannot see the full menu, enlarge the window else navigation is confusing*
-* to execute the line, highlight and press ENTER.
-* to highlight a line, press its key (on the left) or use the up/down arrow keys
-* after an execution, you will be placed on the next item, but you can easily choose to repeat or skip steps
-</br>
-* executing `a` runs `my-snaps` described below.
-* executing `c` takes you to another menu (shown below)
-* normally, you execute either `e` or `f`
-* if no flatpaks, skip `h` and `j`
-
-Choosing `RELEASE UPGRADE` offers this sub-menu:
-
-![my-update-p2.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-update-p2.png?raw=true)
-
-* `b` and `e` cause reboots; note the reboot step, re-run `my-update`, and navigate to the next step in the upgrade.
-* `g` and beyond are "advanced steps" and somewhat optional.
-* if there are "unsatisfied" packages, use a separate window to erase them if you please
-* See [Upgrading Fedora Using DNF System Plugin :: Fedora Docs](https://docs.fedoraproject.org/en-US/quick-docs/upgrading-fedora-offline/) for more details.
-
----
 
 ## my-snaps
 `my-snaps` can be used for simple snapshot maintenance. After running, it may look like this:
 
-![my-snaps.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-snaps.png?raw=true)
+[comment]: ![my-snaps.png](https://github.com/joedefen/update-tools/blob/main/images/my-snaps.png?raw=true)
+![my-snaps.png](images/my-snaps.png)
 
 * In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separate to remind you of the fields when needed.
-* All snapshots are expected to be in `/.snapshots/`
+* All snapshots are expected to be in snapshot only subvolume mounted at `/.snapshots/`
 * Snapshots are to be named `{subvol}.YYYY-MM-DD-HHmmss` where `YYYY` are time fields separated by dashes or colons only PLUS and optional "label" that begins with `=`.
 * On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create one.
 * On subsequent runs, `r` replaces your eldest snapshot of the same label for each top-level subvolume that has any snapshots.
+* On subsequent runs, `a` replaces a snapshot of the same label for each top-level subvolume that has any snapshots.
   * to describe snapshots, add a short label when prompted (e.g., "=preF40upg").
   * **note**: you cannot use the characters "." or "/" in the snapshot names and labels
 * On subsequent runs, `a` adds one snapshot for each top-level subvolume that has any snapshots.
@@ -82,13 +58,15 @@ Choosing `RELEASE UPGRADE` offers this sub-menu:
 ## my-restore
 `my-restore` is used to restore one or more of your snapshots. When launched, you see something like this:
 
-![my-restore-p1.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-restore-p1.png?raw=true)
+[comment]: ![my-restore-p1.png](https://github.com/joedefen/my-snaps-tools/blob/main/images/my-restore-p1.png?raw=true)
+![my-restore-p1.png](images/my-restore-p1.png)
 
 Choose the desired BTRFS partition to mount on `/mnt` (after running `umount /mnt` if occupied).
 
 Next you'll see a screen like this:
 
-![my-restore-p2.png](https://github.com/joedefen/jdef-fedora-tools/blob/main/images/my-restore-p2.png?raw=true)
+[comment]: ![my-restore-p2.png](https://github.com/joedefen/update-tools/blob/main/images/my-restore-p2.png?raw=true)
+![my-restore-p2.png](images/my-restore-p2.png)
 
 * unless you have a very wide screen, the commands will be truncated, but ensure you can see the snapshots names after "RESTORE"; when restoring, you are
   * creating new writeable snapshots from your saved snapshots, first named {subvol}.old
@@ -118,13 +96,6 @@ Next you'll see a screen like this:
 * use `my-restore` to return to a working system and reboot and eventually clean up again.
 * if snapshots alone will not do, read the following section on `/boot` and `/boot-efi`.
 
-### How /boot and /boot/efi Placement affects Restores
-Personally, I place `/boot` within my root BTRFS partition (although not a Fedora standard). This causes a grub warning that can be suppressed by running `sudo grub2-editenv - unset menu_auto_hide` (however mysterious that seems).  Consider using that pattern on new installs and retrofitting old installs.
-
-**But, if /boot is a separate ext4 partition, there are greater chances of a restore not working.** Generally, when you restore an older snapshot (especially one you just created), its Linux version will still be present ... so, in the boot menu, if the newer OS version will not boot, iteratively try older versions until one works.  In the worst case, you'll need to do a **boot repair**; search for "*Restoring the bootloader using the Live disk*" in [Fedora Linux User Documentation :: Fedora Docs](https://docs.fedoraproject.org/en-US/fedora/latest/).
-
-As part of `my-update`, it copies `/boot/efi` (the UEFI boot partition) to `/boot/efi.{date}` and removes old versions. In some cases, that might help repair `/boot/efi`; but if not, the boot repair from the Live disk procedure is the definitive fix.
-
 ---
 
 ## Initial and Regression Testing
@@ -149,8 +120,3 @@ If there are issues, ensure snapshots are in `/.snapshots` and they are named `{
   * create a list or script of post-install tasks to add/remove apps (save with your dotfiles or in the cloud)
 * BTW, the above complementary strategies have even more value if you have multiple installs (e.g., a desktop, a 24/7 server, and a few laptops all running similarly with the same apps an basic config).
 * For more comprehensive protection, consider `snapper`, `btrbk`, `btrfsmaintenance`, and google for others.
-
----
-
-## BONUS: There is an Update Menu for EndeavourOS, too
-When `my-update` runs on an EndeavorOS system, a different menu appears that is appropriate for EndeavorOS. It assumes that you've install `yay` as your AUR helper tool.  The maintence steps are those suggested in the EndeavorOS docs; note, that some of the steps are only needed infequently, perhaps months, if you wish to skip them sometimes.  And since EndeavourOS is a rolling release, there is only one menu since every update is the same.
