@@ -25,17 +25,16 @@ class BtrfsRestore:
         prompts['x'] = 'EXIT'
         while True:
             menu = Menu(prompts, str(todo) if todo else None)
-            choice = menu.prompt()
-            if choice == 'x':
+            choice = menu.get_prompt_obj()
+            if choice.key == 'x':
                 sys.exit(0)
-            cmd = prompts[choice].strip()
+            cmd = menu.get_command(choice)
             if not cmd.startswith('#'):
                 if not force and self.dry_run:
                     os.system(f'echo WOULD + {precmd!r} {cmd!r}')
                 else:
                     os.system(f'clear;set -x; {precmd} {cmd}')
-            todo = chr(ord(choice) + 1)
-            todo = todo if str(todo) in prompts else 'x'
+            todo = choice.next
             if once:
                 return todo
 
@@ -101,10 +100,10 @@ class BtrfsRestore:
                     snaps[subpath] = subvol
                 except Exception:
                     pass
-        # print(f'{snaps=} {subs=} {prevs=}')
+        print(f'{snaps=}')
         cmds = {}
         skips = set()
-        idx = 'a'
+        key = 'a'
         snaps = {k: snaps[k] for k in sorted(snaps)}
         for snap_path, subvol in snaps.items():
             subvol = snaps[snap_path]
@@ -113,26 +112,26 @@ class BtrfsRestore:
             has_old = os.path.exists(f'{subvol}.OLD')
             has_new = os.path.exists(f'{subvol}.NEW')
             if not os.path.exists(f'{subvol}'):
-                cmds[str(idx)] = f'# ERR: {subvol} does NOT exist'
+                cmds[key] = f'# ERR: {subvol} does NOT exist'
                 skips.add(subvol)
             elif has_old and has_new:
-                cmds[str(idx)] = f'# ERR: {subvol}.OLD AND {subvol}.NEW exists'
+                cmds[key] = f'# ERR: {subvol}.OLD AND {subvol}.NEW exists'
                 skips.add(subvol)
             elif os.path.exists(f'{subvol}.OLD'):
-                cmds[str(idx)] = (f'echo RE-RESTORE "{subvol}" && '
-                    f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"')
+                cmds[key] = [f'RE-RESTORE: {subvol}',
+                    f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"']
                 skips.add(subvol)
             elif os.path.exists(f'{subvol}.NEW'):
-                cmds[str(idx)] = (f'echo UN-RESTORE "{subvol}" && '
-                    f'mv "{subvol}" "{subvol}.OLD" && mv "{subvol}.NEW" "{subvol}"')
+                cmds[key] = [f'UN-RESTORE: {subvol}',
+                    f'mv "{subvol}" "{subvol}.OLD" && mv "{subvol}.NEW" "{subvol}"']
                 skips.add(subvol)
             else:
                 basename = os.path.basename(snap_path)
-                cmds[idx] = (f'echo RESTORE "{basename}" && '
+                cmds[key] = [f'RESTORE: {basename}',
                     f'btrfs sub snap "{snap_path}" "{subvol}.OLD" && '
-                        + f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"')
-            idx = chr(ord(idx) + 1)
-        cmds[idx] = 'reboot now'
+                        f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"']
+            key = Menu.get_next_key(key)
+        cmds[key] = 'reboot now'
         return self.do_command(cmds, once=True, todo=todo)
 
     def main(self):
