@@ -1,0 +1,6 @@
+#!/bin/sh
+# keeps 2 weekly snaps tagged =Weekly
+#  - install this script in /etc/cron.weekly
+#  - test with: sudo run-parts /etc/cron.weekly
+#  - check last result in /tmp/.my-snaps-weekly.txt
+my-snaps -p -s2 -L=Weekly >/tmp/.my-snaps-weekly.txt 2>&1

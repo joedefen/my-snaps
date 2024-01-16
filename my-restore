@@ -6,9 +6,14 @@
 import sys
 import os
 import subprocess
+from datetime import datetime
 import re
 from types import SimpleNamespace
 from InlineMenu import Menu
+
+def stamp():
+    """ Get a data string for a time of so many days ago. """
+    return datetime.now().strftime("%Y-%m-%d-%H%M%S")
 
 class BtrfsRestore:
     """ TBD """
@@ -24,10 +29,17 @@ class BtrfsRestore:
         """ TBD"""
         prompts['x'] = 'EXIT'
         while True:
-            menu = Menu(prompts, str(todo) if todo else None)
+            prompts['y'] = (f'toggle dry-run='
+                            + ('ON' if self.dry_run else 'OFF'))
+            menu = Menu(prompts, str(todo) if todo else None,
+                        title='my-restore menu'
+                          + ' DRY-RUN' if self.dry_run else '')
             choice = menu.get_prompt_obj()
             if choice.key == 'x':
                 sys.exit(0)
+            if choice.key == 'y':
+                self.dry_run = not self.dry_run
+                continue
             cmd = menu.get_command(choice)
             if not cmd.startswith('#'):
                 if not force and self.dry_run:
@@ -80,57 +92,82 @@ class BtrfsRestore:
             todo = '0'
         todo = self.do_command(cmds, todo, once=True, force=True)
 
-    def select_restores(self, todo='a'):
-        """ TBD """
-        # pylint: disable=too-many-branches
-        os.chdir('/mnt')
+    def get_state(self):
+        """ Create a dict of subvolumes that have a snapshots and/or a reverted tip """
         command_output = subprocess.check_output([
             'btrfs', 'sub', 'list', '.']).decode('utf-8')
         lines = command_output.split('\n')
-        snaps = {}
+        # ID 667 gen 216849 top level 5 path eos@my-opt
+        # ID 699 gen 217076 top level 5 path eos@snapshots
+        # ID 782 ... eos@snapshots/eos@root.2024-01-10-174732=Update
+        # ID 791 ... eos@snapshots/eos@root.2024-01-13-084102=Daily
+        subnames = set()
+        subs = {}
+        reverts = {}
         for line in lines:
             mat = re.search(r"\bpath\s+(\S+)", line)
             if not mat:
                 continue
             subpath = mat.group(1)
-            wds = subpath.split('/')
-            if len(wds) > 1 and wds[-2].endswith('@snapshots'):
-                try:
-                    subvol, _ = wds[-1].rsplit('.', maxsplit=1)
-                    snaps[subpath] = subvol
-                except Exception:
-                    pass
-        print(f'{snaps=}')
-        cmds = {}
-        skips = set()
-        key = 'a'
-        snaps = {k: snaps[k] for k in sorted(snaps)}
-        for snap_path, subvol in snaps.items():
-            subvol = snaps[snap_path]
-            if subvol in skips:
+            basename = os.path.basename(subpath)
+            parent = os.path.dirname(subpath)
+            if not parent and not basename.endswith('@snapshot'):
+                if '.' in basename and basename.endswith('=Reverted'):
+                    reverts[basename.split('.', 1)[0]] = subpath
+                elif not '.' in basename:
+                    subnames.add(basename)
                 continue
-            has_old = os.path.exists(f'{subvol}.OLD')
-            has_new = os.path.exists(f'{subvol}.NEW')
-            if not os.path.exists(f'{subvol}'):
-                cmds[key] = f'# ERR: {subvol} does NOT exist'
-                skips.add(subvol)
-            elif has_old and has_new:
-                cmds[key] = f'# ERR: {subvol}.OLD AND {subvol}.NEW exists'
-                skips.add(subvol)
-            elif os.path.exists(f'{subvol}.OLD'):
-                cmds[key] = [f'RE-RESTORE: {subvol}',
-                    f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"']
-                skips.add(subvol)
-            elif os.path.exists(f'{subvol}.NEW'):
-                cmds[key] = [f'UN-RESTORE: {subvol}',
-                    f'mv "{subvol}" "{subvol}.OLD" && mv "{subvol}.NEW" "{subvol}"']
-                skips.add(subvol)
+            if parent.endswith('@snapshots'):
+                wds = basename.split('.', 1)
+                if len(wds) > 1:
+                    subvol = wds[0]
+                    sub_snaps = subs.get(subvol, [])
+                    sub_snaps.append(subpath)
+                    subs[subvol] = sub_snaps
+        rv = {}
+        for name in sorted(subnames):
+            sub_snaps = subs.get(name, [])
+            revert = reverts.get(name, None)
+            if sub_snaps or revert:
+                rv[name] = SimpleNamespace(
+                    revert=revert, snaps=sorted(sub_snaps))
+
+        # for name, ns in rv.items(): print(f'{name}: {ns}')
+        return rv
+
+    def select_restores(self, todo='a'):
+        """ TBD """
+        def advance(key, lead):
+            return Menu.get_next_key(key), ' '*len(lead)
+
+        # pylint: disable=too-many-branches
+        os.chdir('/mnt')
+        subs = self.get_state()
+        key, cmds = 'a', {}
+
+        for subvol, ns in subs.items():
+            lead = f'{subvol}'
+            if ns.revert:
+                cmds[key] = [
+                    f'{lead}: revert {ns.revert}',
+                    f'btrfs sub del "{subvol}" && mv "{ns.revert}" "{subvol}"',
+                ]
+                key, lead = advance(key, lead)
+                cmds[key] = [
+                    f'{lead}: del {ns.revert}',
+                    f'btrfs sub del "{ns.revert}"',
+                ]
+                key, lead = advance(key, lead)
+                prep = f'btrfs sub del "{subvol}" &&'
             else:
-                basename = os.path.basename(snap_path)
-                cmds[key] = [f'RESTORE: {basename}',
-                    f'btrfs sub snap "{snap_path}" "{subvol}.OLD" && '
-                        f'mv "{subvol}" "{subvol}.NEW" && mv "{subvol}.OLD" "{subvol}"']
-            key = Menu.get_next_key(key)
+                prep = f'mv "{subvol}" "{subvol}.{stamp()}=Reverted" &&'
+
+            for snap in ns.snaps:
+                cmds[key] = [
+                    f'{lead}: restore {os.path.basename(snap)}',
+                    f'{prep} btrfs sub snap "{snap}" "{subvol}"',
+                ]
+                key, lead = advance(key, lead)
         cmds[key] = 'reboot now'
         return self.do_command(cmds, once=True, todo=todo)
 

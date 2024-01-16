@@ -4,13 +4,13 @@
 * `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates).
 * You can schedule period snapshots with the additional tool, `daily-snaps`.
 * `my-restore` assists restoring snapshots to back out changes to the system
-* `my-snaps` and `my-restore` are not necessarily Fedora specific, but you may need to adjust a few instructions to use them elsewhere.
 
 **Installation.** To install into `/usr/local/bin` (which is hopefully on your PATH):
 ```
-  sudo dnf install git  # also, python 3.8 or later is required
+  # note: python 3.8 or later is required
+  # install git  if needed
   cd ~  # or anywhere desired (e.g., ~/Projects)
-  git clone https://github.com/joedefen/update-tools.git
+  git clone https://github.com/joedefen/my-snaps.git
   ./update-tools/deploy  # NOTE: use "undeploy" script to reverse an install
 ```
 * you must keep the source directory (`deploy` creates symbolic links to the tools).
@@ -20,7 +20,6 @@
 *Note that no separately installed python modules are required.*  This adds extra code for the menus, but the benefit nothing except new `python3` incompatibilities will break the tools. Experience suggests this precaution is well justified.
 
 ---
-
 
 ## my-snaps
 `my-snaps` can be used for simple snapshot maintenance. After running, it may look like this:
@@ -49,9 +48,9 @@
 **Non-interactive use**: `my-snaps` can be run non-interactively with these options:
 * `-p` or `--print` dumps your top-level subvolumes and their snapshots
 * `-s{N}` or `--add-snap-max={N}` adds a new snapshot for each subvolume with snapshots and removes the eldest until there are no more than `{N}`.
+* `-l{label}` or `--label={label}` to set the label of the snapshots involved.
 
-**Periodic Snapshots**: The included tool, `my-snaps-cronjob` can be added to cron (with `crontab -e`) to set up periodic snapshots; read `my-snaps-cronjob` for details.
-
+**Periodic Snapshots**: The included scripts, `daily-snaps` and `weekly` may be copied to `/etc/cron.daily` and `/etc/cron.weekly` to be run by `anacron` which must be installed (but `cronie` or equivalent).
 
 ---
 
@@ -68,26 +67,26 @@ Next you'll see a screen like this:
 [comment]: ![my-restore-p2.png](https://github.com/joedefen/update-tools/blob/main/images/my-restore-p2.png?raw=true)
 ![my-restore-p2.png](images/my-restore-p2.png)
 
-* unless you have a very wide screen, the commands will be truncated, but ensure you can see the snapshots names after "RESTORE"; when restoring, you are
-  * creating new writeable snapshots from your saved snapshots, first named {subvol}.old
-  * and then {subvol} is renamed {subvol}.new (new is the one you wish to back out)
-  * and then {subvol}.old is renamed {subvol} so that the restored subvolume becomes current.
+* when restoring, you are
+  * if there is a backed-out version, the target subvolume will be removed,
+  * else the target subvolume is renamed "subvolume.YYYY-MM-DD-HHMMSS=Reverted";
+  * a new writeable snapshot for subvolume is created from the snapshot
 
 * highlight and press enter the subvolumes to effect the given action:
-  * RESTORE promotes the snapshot to current
-  * UN-RESTORE demotes a restored snapshot to {subvol}.old and rename {subvol}.new as {subvol}
-  * RE-RESTORE undoes a UN-RESTORE by renaming {subvol} as {subvol}.new and {subvol}.old as {subvol}
+  * **restore**: promotes the snapshot to current
+  * **revert**: removes the target subvolume and moves the reverted volume tip back into place
+  * **del**: deletes the reverted subvolume tip; **note**: normally delay 'del' until you have a working restore and you are done with the restore;  when done, it is best to delete the "=Reverted" subvolume (to free space).
 * **unless you see some UN-RESTORE actions list, there are no pending changes**
 * when you are done with setting up the snapshot restorals, reboot the system
 
 **------------- IMPORTANT NOTES -------------**
 
 **When a restore is tested and deemed satisfactory then clean up.**
-* To clean up, launch `my-snaps` and remove the `.new` or `.old` subvolumes.
-* **Warning**: Failing to clean up will confuse the next `my-restore` and which may suggest undoing your successful restore.
+* To clean up, launch `my-snaps` or `my-restore` and delete "=Reverted" subvolumes.
+* **Warning**: Failing to clean up will confuse the next `my-restore` and waste space.
 
 **When a restore is tested and deemed unsatisfactory:**
-* Launch `my-snaps` and adjust the restored snapshots as desired.
+* Launch `my-snaps` and adjust the restored snapshots as desired (e.g., try restoring a different snapshot or reverting the tip).
 * Then reboot, test, and iterate until you are done and then clean up (described immediately above).
 
 **In the case that an update or restore will not boot, then**:
@@ -105,11 +104,10 @@ Do not assume the BTRFS scripts work for you and then be in a pickle later. Afte
   * the expected snapshots are showing, and
   * add snapshots for the volumes you may wish to restore.
 
-* If `my-snaps` is working, run `my-restore` and, after device selection, that the RESTORE entries look right, and
-* If all looks well, RESTORE and then UN-RESTORE one of your subvolumes (leaving all subvolumes in RESTORE or RE-RESTORE state)
-* After the tests, run `my-snaps` again and remove the .old subvolumes (if there are any .new subvolumes UN-RESTORE them with `my-restore` and repeat).
+* If `my-snaps` is working, run `my-restore` and, after device selection, that the "restore" entries look right, and
+* If all looks well, restore and then revert one of your subvolumes (returning all subvolumes as they were).
 
-If there are issues, ensure snapshots are in `/.snapshots` and they are named `{subvol}.{timespec}` where `{timespec}` has only numbers, dashes and colons.
+If there are issues, ensure snapshots are in a subvolume ending with `@snapshots` which is normally mounted at `/.snapshots`, and snapshots are named `{subvol}.{timespec}[=Label]` where `{timespec}` has only numbers, dashes and colons.
 
 ---
 

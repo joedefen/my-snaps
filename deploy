@@ -10,3 +10,4 @@ for x in my-snaps my-restore; do
 done
 
 (set -x; sudo cp daily-snaps /etc/cron.daily/.)
+(set -x; sudo cp weekly-snaps /etc/cron.weekly/.)

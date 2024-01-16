@@ -8,4 +8,5 @@ for x in my-snaps my-restore my-snaps-cronjob; do
     # sudo ln -s "$HERE/$x" "$DEST/$x"
 done
 
-sudo rm -f /etc/cron.daily/daily-snaps
+(set -x; sudo rm -f /etc/cron.daily/daily-snaps)
+(set -x; sudo rm -f /etc/cron.weekly/weekly-snaps)
