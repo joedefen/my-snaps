@@ -103,7 +103,7 @@ class BTRFS:
             sys.exit(-1)
         filename = os.path.join(dirname, f'{opts.cron}-snaps')
         text = '#!/bin/sh\n'
-        text += f'my-snaps -p -s{opts.add_snap_max}'
+        text += f'{sys.executable} {os.path.abspath(__file__)} -p -s{opts.add_snap_max}'
         text += f' -L{opts.label} >/tmp/.my-snaps-{opts.cron}.txt 2>&1\n'
         with open(filename, mode='w', encoding='utf-8') as f:
             f.write(text)

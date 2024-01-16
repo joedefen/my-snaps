@@ -32,11 +32,12 @@ eos@snapshots:
 * **If `python3 -V` shows v3.11 or later, install using `pipx`**:
 * `python3 -m pip install --user pipx # if pipx not installed`
   * `python3 -m pipx ensurepath # if needed (restart terminal)`
-  * `sudo pipx upgrade my-snaps || sudo pipx install my-snaps # to install/upgrade`
+  * `pipx upgrade my-snaps || pipx install my-snaps`
 * **Else for python3.10 and lesser versions, install using `pip`**:
   * `sudo python3 -m pip install --upgrade my-snaps`
 
-**NOTE**: after install, run some tests per "Initial and Regression Testing"
+**NOTE**:
+* after install, run some tests per "Initial and Regression Testing"
 
 ---
 
@@ -65,7 +66,6 @@ eos@snapshots:
   * job is stored in `/etc/cron.{period}/{period}.snaps` 
   * each time the job is run, its output goes to `/tmp/.my-snaps-{period}.txt`
   * removal of the job is done manually
-
 
 ---
 
@@ -106,8 +106,8 @@ Next you'll see a screen like this:
 
 **In the case that an update or restore will not boot, then**:
 * boot the live installer.
-* install these tools per the instructions.
-* use `my-restore` to return to a working system and reboot and eventually clean up again.
+* install these tools per the instructions (a non-sudo install is OK)
+* use `my-restore` to return to a working system and reboot and eventually clean up the reverted subvolumes on the installed system.
 
 ---
 
@@ -122,6 +122,10 @@ Do not assume the BTRFS scripts work for you and then be in a pickle later. Afte
 * If all looks well, restore and then revert one of your subvolumes (returning all subvolumes as they were).
 
 If there are issues, ensure snapshots are in a subvolume ending with `@snapshots` which is normally mounted at `/.snapshots`, and snapshots are named `{subvol}.{timespec}[=Label]` where `{timespec}` has only numbers, dashes and colons.
+
+If you installed period snap scripts, ensure:
+* tests with `sudo run-parts --debug -v /etc/cron.daily` (or whichever directory)
+* run `ls -ltr /tmp/.my-snaps-*` to check that it was run recently by looking at timestamps.
 
 ---
 

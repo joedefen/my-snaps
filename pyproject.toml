@@ -23,7 +23,7 @@
 #   rm -r dist; python3 -m build
 #   python3 -m twine upload --repository testpypi dist/*
 #     ## Enter __token__ and the saved TOKEN (in bitwarden)
-#   sudo python3 -m pip install --index-url https://test.pypi.org/simple/ --no-deps my-snaps
+#   sudo python3 -m pip install --upgrade --index-url https://test.pypi.org/simple/ --no-deps --break-system-packages my-snaps
 #   ## VISIT  https://test.pypi.org/project/my-snaps and delete old versions
 
 [build-system]
