@@ -1,9 +1,32 @@
-# snap-tools README
-> Tools for managing Btrfs snapshots
+# my-snaps README
+> Simple Tools for managing BTRFS snapshots
 
 * `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates).
-* You can schedule period snapshots with the additional tool, `daily-snaps`.
 * `my-restore` assists restoring snapshots to back out changes to the system
+
+**Prerequisites.** To use these tools, you must have an appropriate BTRFS setup:
+* Your mounted top-level subvolume names must not contain '.' (i.e., periods).
+* Your snapshot names must be one of the forms:
+  * `{subvolume}.{date-string}`
+  * `{subvolume}.{date-string}={label}`
+* Your snapshots must reside in a top-level subvolume ending with "snapshots"; and it must normally be mounted at `/.snapshots`
+* Labels define sets of snapshots that independently managed.
+  * **note**: you cannot use the characters "." or "/" in the snapshot names and labels
+  * Suggested labels:
+    * **=Update** - created prior to a system update
+    * **=Daily** - scheduled daily snapshots (and similarly for other periods)
+
+Here is a compliant BTRFS setup showing it subvolumes/snapshots:
+```
+top-levels: eos@cache  eos@home  eos@log  eos@my-opt  eos@root  eos@snapshots
+
+eos@snapshots:
+'eos@home.2024-01-13-093817=Update'    'eos@root.2024-01-10-174732=Update'
+'eos@home.2024-01-14-085102=Daily'     'eos@root.2024-01-13-084102=Daily'
+'eos@home.2024-01-15-201554=Update'    'eos@root.2024-01-13-093817=Update'
+'eos@my-opt.2024-01-13-093817=Update'  'eos@root.2024-01-14-085102=Daily'
+'eos@my-opt.2024-01-14-085102=Daily'
+```
 
 **Installation.** To install into `/usr/local/bin` (which is hopefully on your PATH):
 ```
@@ -27,30 +50,26 @@
 [comment]: ![my-snaps.png](https://github.com/joedefen/update-tools/blob/main/images/my-snaps.png?raw=true)
 ![my-snaps.png](images/my-snaps.png)
 
-* In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separate to remind you of the fields when needed.
-* All snapshots are expected to be in snapshot only subvolume mounted at `/.snapshots/`
-* Snapshots are to be named `{subvol}.YYYY-MM-DD-HHmmss` where `YYYY` are time fields separated by dashes or colons only PLUS and optional "label" that begins with `=`.
-* On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create one.
-* On subsequent runs, `r` replaces your eldest snapshot of the same label for each top-level subvolume that has any snapshots.
-* On subsequent runs, `a` replaces a snapshot of the same label for each top-level subvolume that has any snapshots.
-  * to describe snapshots, add a short label when prompted (e.g., "=preF40upg").
-  * **note**: you cannot use the characters "." or "/" in the snapshot names and labels
-* On subsequent runs, `a` adds one snapshot for each top-level subvolume that has any snapshots.
+* In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separately to remind you of the fields when needed.
+* On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create one (use one of your standard labels)
+* `r` replaces your eldest snapshot of the same label for each top-level subvolume that has any snapshots.
+* `a` replaces a snapshot of the same label for each top-level subvolume that has any snapshots.
+  * to describe snapshots, add a short label when prompted (e.g., "=Update").
+* `d`: to remove highlighted subvolume (usually pick a snapshot); you cannot remove mounted subvolumes; if there are nested subvolumes, those are removed too.
+* `u`: to get disk usage (this can take quite a while and is not perfect)
+* `?`: to get help on all keys and navigation
 
-> **Labels** create sets of snapshots that independently managed. You can create unique labels that are only removed manually.
-
-* Some other keys are:
-  * `d`: to remove highlighted subvolume (usually pick a snapshot); you cannot remove mounted subvolumes; if there are nested subvolumes, those are removed too.
-  * `u`: to get disk usage (this can take quite a while and is not perfect)
-  * `?`: to get help on all keys and navigation
-* **NOTE**: actions require confirmation to ensure accidental keystrokes do not clobber your system.
+**NOTE**: actions often require confirmation to ensure accidental keystrokes do not clobber your system.
 
 **Non-interactive use**: `my-snaps` can be run non-interactively with these options:
 * `-p` or `--print` dumps your top-level subvolumes and their snapshots
 * `-s{N}` or `--add-snap-max={N}` adds a new snapshot for each subvolume with snapshots and removes the eldest until there are no more than `{N}`.
 * `-l{label}` or `--label={label}` to set the label of the snapshots involved.
+* `--cron={period}` adds an anacron job to add snapshots at the given period with appropriate defaulted `-s` and `-L` or you can specify those
+  * job is stored in `/etc/cron.{period}/{period}.snaps` 
+  * each time the job is run, its output goes to `/tmp/.my-snaps-{period}.txt`
+  * removal of the job is done manually
 
-**Periodic Snapshots**: The included scripts, `daily-snaps` and `weekly` may be copied to `/etc/cron.daily` and `/etc/cron.weekly` to be run by `anacron` which must be installed (but `cronie` or equivalent).
 
 ---
 
@@ -68,14 +87,14 @@ Next you'll see a screen like this:
 ![my-restore-p2.png](images/my-restore-p2.png)
 
 * when restoring, you are
-  * if there is a backed-out version, the target subvolume will be removed,
-  * else the target subvolume is renamed "subvolume.YYYY-MM-DD-HHMMSS=Reverted";
-  * a new writeable snapshot for subvolume is created from the snapshot
+* if there is a backed-out version, the target subvolume will be removed,
+* else the target subvolume is renamed "subvolume.YYYY-MM-DD-HHMMSS=Reverted";
+* a new writeable snapshot for subvolume is created from the snapshot
 
 * highlight and press enter the subvolumes to effect the given action:
-  * **restore**: promotes the snapshot to current
-  * **revert**: removes the target subvolume and moves the reverted volume tip back into place
-  * **del**: deletes the reverted subvolume tip; **note**: normally delay 'del' until you have a working restore and you are done with the restore;  when done, it is best to delete the "=Reverted" subvolume (to free space).
+* **restore**: promotes the snapshot to current
+* **revert**: removes the target subvolume and moves the reverted volume tip back into place
+* **del**: deletes the reverted subvolume tip; **note**: normally delay 'del' until you have a working restore and you are done with the restore;  when done, it is best to delete the "=Reverted" subvolume (to free space).
 * **unless you see some UN-RESTORE actions list, there are no pending changes**
 * when you are done with setting up the snapshot restorals, reboot the system
 
@@ -93,7 +112,6 @@ Next you'll see a screen like this:
 * boot the live installer.
 * install these tools per the instructions.
 * use `my-restore` to return to a working system and reboot and eventually clean up again.
-* if snapshots alone will not do, read the following section on `/boot` and `/boot-efi`.
 
 ---
 

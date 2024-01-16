@@ -1,6 +1,0 @@
-#!/bin/sh
-# keeps 4 daily snaps tagged =Daily
-#  - install this script in /etc/cron.daily
-#  - test with: sudo run-parts /etc/cron.daily
-#  - check last result in /tmp/.my-snaps-daily.txt
-my-snaps -p -s4 -L=Daily >/tmp/.my-snaps-daily.txt 2>&1

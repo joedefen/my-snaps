@@ -13,52 +13,18 @@ starting the window.
 # pylint: disable=too-many-locals,broad-exception-caught,multiple-statements
 # pylint: disable=too-many-instance-attributes,import-outside-toplevel
 # pylint: disable=global-statement,broad-exception-raised,too-many-branches
+# pylint: disable=too-many-statements,too-many-arguments
 
 import re
 import os
-import time
 import sys
 import atexit
 import traceback
 import subprocess
-from datetime import datetime
 import curses as cs
 from types import SimpleNamespace
 from PowerWindow import Window, OptionSpinner
-
-
-def human(number):
-    """ Return a concise number description."""
-    suffixes = ['K', 'M', 'G', 'T']
-    number = float(number)
-    while suffixes:
-        suffix = suffixes.pop(0)
-        number /= 1024
-        if number < 99.95 or not suffixes:
-            return f'{number:.1f}{suffix}'
-    return None
-
-##############################################################################
-##   Turn time differences in seconds to a compact representation;
-##   e.g., '18h·39m'
-##############################################################################
-def ago_str(delta_secs, signed=False):
-    """TBD"""
-    ago = int(max(0, round(delta_secs if delta_secs >= 0 else -delta_secs)))
-    divs = (60, 60, 24, 7, 52, 9999999)
-    units = ('s', 'm', 'h', 'd', 'w', 'y')
-    vals = (ago%60, int(ago/60)) # seed with secs, mins (step til 2nd fits)
-    uidx = 1 # best units
-    for div in divs[1:]:
-        # print('vals', vals, 'div', div)
-        if vals[1] < div:
-            break
-        vals = (vals[1]%div, int(vals[1]/div))
-        uidx += 1
-    rv = '-' if signed and delta_secs < 0 else ''
-    rv += f'{vals[1]}{units[uidx]}' if vals[1] else ''
-    rv += f'{vals[0]:d}{units[uidx-1]}'
-    return rv
+from MyUtils import human, ago_whence, timestamp_str
 
 ##############################################################################
 
@@ -83,11 +49,16 @@ class BTRFS:
 
         atexit.register(self.umount_tmps)
 
+        if opts.cron:
+            self._install_cron_job(opts)
+            sys.exit(0)
+
         self._refresh_if_dirty()
 
         if self.DB:
             self._get_disk_usage()
             sys.exit(0)
+
 
         if self.add_limit > 0:
             if opts.label:
@@ -119,6 +90,20 @@ class BTRFS:
                   f'{mount_str:>{mounts_width}}'
                   f' {row.dev:>{devs_width}}'
                   f' {shown_path:<{path_width}}')
+
+    def _install_cron_job(self, opts):
+        """ Add/replace an anacron job for scheduled snapshots """
+        dirname = f'/etc/cron.{opts.cron}'
+        if not os.path.isdir(dirname):
+            print('ERROR: {dirname!r} does not exist')
+            sys.exit(-1)
+        filename = os.path.join(dirname, f'{opts.cron}.snaps')
+        text = '#!/bin/sh\n'
+        text += f'my-snaps -p -s{opts.add_snap_max}'
+        text += f' -L{opts.label} >/tmp/.my-snaps-{opts.cron}.txt 2>&1\n'
+        with open(filename, mode='w', encoding='utf-8') as f:
+            f.write(text)
+        print(f'OK: to {filename!r}, wrote:\n{text}')
 
     def _refresh_if_dirty(self):
         if not self.dirty:
@@ -163,8 +148,7 @@ class BTRFS:
                     yield from children_iter(subvol_ns, top_down=top_down)
 
     def _cur_snap_suffix(self):
-        return datetime.now().strftime('.%Y-%m-%d-%H%M%S'
-                       ) + ('' if self.label is None else self.label)
+        return timestamp_str() + ('' if self.label is None else self.label)
 
     def stop_curses(self):
         """Terminate curses if running."""
@@ -244,7 +228,7 @@ class BTRFS:
             win.clear()
 
     def _replace_eldest_snaps_of_subvol(self, subvol_ns, like_snaps,
-                                        ans=None, discard=1, just_add=False):
+                                        ans=None, discard=1):
         """ For ONE subvolume having snapshots, remove those and create a new snapshot."""
 
         if not subvol_ns.snaps:
@@ -261,7 +245,7 @@ class BTRFS:
 
     def _replace_eldest_snaps(self, discard=1, just_add=False):
         """ TBD """
-        ans, total_cnt, success = None, 0, None
+        ans, success = None, None
 
         if self.add_limit > 0:
             ans = self._cur_snap_suffix()
@@ -280,10 +264,6 @@ class BTRFS:
                         if self.label is None or snap.snap_label == self.label:
                             like_snaps.append(snap)
                             labels.add(snap.snap_label if snap.snap_label else "''")
-#                   if not ans and self.add_limit <= 0:
-#                       # total_cnt += len(like_snaps[:discard])
-#                       pass
-#                   else:
                     if ans or self.add_limit > 0:
                         this_cnt = len(like_snaps)
                         if self.add_limit > 0:
@@ -297,9 +277,6 @@ class BTRFS:
                         self.label = None
             if ans:
                 break
-#           if total_cnt == 0:
-#               self.win.alert('Sorry, no snapshots found to replace.')
-#               break
             while True:
                 ans = self.win.answer(
                         f'Set snap suffix OR clear; labels: {",".join(list(labels))}',
@@ -320,11 +297,6 @@ class BTRFS:
         if not subvol_ns:
             subvol_ns = self.rows[self.win.pick_pos].subvol_ns
         dev_ns = self.devs[subvol_ns.dev]
-#       root_ns = dev_ns.subvols[0]
-#       if root_ns.mount != '/':
-#           # TODO: generalize so that we find the root subvolume by naming convention?
-#           self.win.alert('Sorry, no {subvol_ns.dev} is mounted as "/"')
-#           return False
 
         if subvol_ns.snap_of:
             self.win.alert('Sorry, cannot create snapshot of snapshot')
@@ -347,8 +319,6 @@ class BTRFS:
 
         snap_dir = f'{dev_ns.tmp_path}{self.snap_subvol.path}'
         snap_path = f'{snap_dir}{subvol_ns.path}{ans}'
-#       if not os.path.isdir(snap_dir):
-#           os.makedirs(snap_dir)
 
         cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
         out, err, code = self._slurp_command(cmd)
@@ -477,10 +447,7 @@ class BTRFS:
                     dev_ns.subvols.append(child)
                 dev_ns.idents[ident] = child
                 dev_ns.paths[path] = child
-                mat = re.search(r'\b(\d\d\d\d-\d\d-\d\d-\d\d\d\d\d\d)\b', child.path)
-                if mat:
-                    dt_object = datetime.strptime(mat.group(1), "%Y-%m-%d-%H%M%S")
-                    child.ago_str = ago_str(time.time() - dt_object.timestamp())
+                child.ago_str = ago_whence(child.path)
 
         if self.DB:
             print('DB: --->>> after mount_tmps()')
@@ -530,7 +497,7 @@ class BTRFS:
                     print(f'DB:   {subvol.dev=} {subvol.mount=} {subvol.path=}')
         assert self.snap_subvol, "cannot find mounted /.snapshots"
 
-    
+
     @staticmethod
     def _get_label(string):
         wds = string.rsplit('=', maxsplit=1)
@@ -720,11 +687,21 @@ if __name__ == "__main__":
                 help='add given label to -s snapshots')
         parser.add_argument('-p', '--print', action="store_true",
                 help='print the subvolumes/snaps and exit')
+        parser.add_argument('--cron', type=str,
+                choices=('hourly', 'daily', 'weekly', 'monthly'),
+                help='install a periodic snapshot anacron job')
         parser.add_argument('--DB', action="store_true",
                 help='add some debugging output')
         opts = parser.parse_args()
         if opts.add_snap_max > 0:
             opts.add_snap_max = min(opts.add_snap_max, 8)
+        if opts.cron:
+            if not opts.label:
+                opts.label = '=' + opts.cron.capitalize()
+            if not opts.add_snap_max:
+                defaults={'hourly': 2, 'daily': 4, 'weekly': 2, 'monthly':1}
+                opts.add_snap_max = defaults[opts.cron]
+            opts.print = False
 
         btrfs = BTRFS(opts)
         btrfs.umount_tmps()

@@ -8,6 +8,3 @@ for x in my-snaps my-restore; do
     sudo rm -f "$DEST/$x"
     (set -x; sudo ln -s "$HERE/$x" "$DEST/$x")
 done
-
-(set -x; sudo cp daily-snaps /etc/cron.daily/.)
-(set -x; sudo cp weekly-snaps /etc/cron.weekly/.)

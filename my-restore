@@ -6,14 +6,10 @@
 import sys
 import os
 import subprocess
-from datetime import datetime
 import re
 from types import SimpleNamespace
 from InlineMenu import Menu
-
-def stamp():
-    """ Get a data string for a time of so many days ago. """
-    return datetime.now().strftime("%Y-%m-%d-%H%M%S")
+from MyUtils import timestamp_str
 
 class BtrfsRestore:
     """ TBD """
@@ -29,11 +25,11 @@ class BtrfsRestore:
         """ TBD"""
         prompts['x'] = 'EXIT'
         while True:
-            prompts['y'] = (f'toggle dry-run='
+            prompts['y'] = ('toggle dry-run='
                             + ('ON' if self.dry_run else 'OFF'))
             menu = Menu(prompts, str(todo) if todo else None,
                         title='my-restore menu'
-                          + ' DRY-RUN' if self.dry_run else '')
+                          + (' DRY-RUN' if self.dry_run else ''))
             choice = menu.get_prompt_obj()
             if choice.key == 'x':
                 sys.exit(0)
@@ -64,8 +60,6 @@ class BtrfsRestore:
                 device, mount, fstype, = wds[0], wds[1], wds[2]
                 if mount == '/mnt':
                     rv = SimpleNamespace(device=device, fstype=fstype)
-                # elif mount == '/' and fstype.lower() == 'btrfs':
-                    # print(f'\nALERT: BTRFS ({device}) mounted on /')
         return rv
 
     def select_mount(self):
@@ -160,11 +154,12 @@ class BtrfsRestore:
                 key, lead = advance(key, lead)
                 prep = f'btrfs sub del "{subvol}" &&'
             else:
-                prep = f'mv "{subvol}" "{subvol}.{stamp()}=Reverted" &&'
+                prep = f'mv "{subvol}" "{subvol}.{timestamp_str()}=Reverted" &&'
 
             for snap in ns.snaps:
+                snap_base = os.path.basename(snap)
                 cmds[key] = [
-                    f'{lead}: restore {os.path.basename(snap)}',
+                    f'{lead}: restore {snap_base} {ago_whence(snap_base)}',
                     f'{prep} btrfs sub snap "{snap}" "{subvol}"',
                 ]
                 key, lead = advance(key, lead)
