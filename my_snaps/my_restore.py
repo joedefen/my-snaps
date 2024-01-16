@@ -7,9 +7,14 @@ import sys
 import os
 import subprocess
 import re
+import traceback
 from types import SimpleNamespace
-from InlineMenu import Menu
-from MyUtils import timestamp_str
+try:
+    from InlineMenu import Menu
+    from MyUtils import timestamp_str, ago_whence
+except:
+    from my_snaps.InlineMenu import Menu
+    from my_snaps.MyUtils import timestamp_str, ago_whence
 
 class BtrfsRestore:
     """ TBD """
@@ -181,4 +186,17 @@ class BtrfsRestore:
         while True:
             todo = self.select_restores(todo=todo)
 
-BtrfsRestore().main()
+
+def run():
+    """Wrap main in try/except."""
+    try:
+        BtrfsRestore().main()
+    except KeyboardInterrupt:
+        pass
+    except Exception as exce:
+        print("exception:", str(exce))
+        print(traceback.format_exc())
+
+
+if __name__ == '__main__':
+    run()

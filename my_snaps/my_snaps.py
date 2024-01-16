@@ -23,8 +23,12 @@ import traceback
 import subprocess
 import curses as cs
 from types import SimpleNamespace
-from PowerWindow import Window, OptionSpinner
-from MyUtils import human, ago_whence, timestamp_str
+try:
+    from PowerWindow import Window, OptionSpinner
+    from MyUtils import human, ago_whence, timestamp_str
+except:
+    from my_snaps.PowerWindow import Window, OptionSpinner
+    from my_snaps.MyUtils import human, ago_whence, timestamp_str
 
 ##############################################################################
 
@@ -97,12 +101,13 @@ class BTRFS:
         if not os.path.isdir(dirname):
             print('ERROR: {dirname!r} does not exist')
             sys.exit(-1)
-        filename = os.path.join(dirname, f'{opts.cron}.snaps')
+        filename = os.path.join(dirname, f'{opts.cron}-snaps')
         text = '#!/bin/sh\n'
         text += f'my-snaps -p -s{opts.add_snap_max}'
         text += f' -L{opts.label} >/tmp/.my-snaps-{opts.cron}.txt 2>&1\n'
         with open(filename, mode='w', encoding='utf-8') as f:
             f.write(text)
+        os.chmod(filename, 0o755)
         print(f'OK: to {filename!r}, wrote:\n{text}')
 
     def _refresh_if_dirty(self):
@@ -148,7 +153,7 @@ class BTRFS:
                     yield from children_iter(subvol_ns, top_down=top_down)
 
     def _cur_snap_suffix(self):
-        return timestamp_str() + ('' if self.label is None else self.label)
+        return '.' + timestamp_str() + ('' if self.label is None else self.label)
 
     def stop_curses(self):
         """Terminate curses if running."""
@@ -671,41 +676,41 @@ class BTRFS:
                   f' {row.dev:>{devs_width}}'
                   f' {shown_path:<{path_width}}')
 
-if __name__ == "__main__":
-    btrfs = None
-    def main():
-        """ TBD """
-        global btrfs
-        import argparse
-        if os.geteuid() != 0: # Re-run the script with sudo
-            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
+btrfs = None
+def main():
+    """ TBD """
+    global btrfs
+    import argparse
+    if os.geteuid() != 0: # Re-run the script with sudo
+        os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
 
-        parser = argparse.ArgumentParser()
-        parser.add_argument('-s', '--add-snap-max', type=int, default=0,
-                help='add snapshots limited to value per subvol [1<=val<=8]')
-        parser.add_argument('-L', '--label', type=str,
-                help='add given label to -s snapshots')
-        parser.add_argument('-p', '--print', action="store_true",
-                help='print the subvolumes/snaps and exit')
-        parser.add_argument('--cron', type=str,
-                choices=('hourly', 'daily', 'weekly', 'monthly'),
-                help='install a periodic snapshot anacron job')
-        parser.add_argument('--DB', action="store_true",
-                help='add some debugging output')
-        opts = parser.parse_args()
-        if opts.add_snap_max > 0:
-            opts.add_snap_max = min(opts.add_snap_max, 8)
-        if opts.cron:
-            if not opts.label:
-                opts.label = '=' + opts.cron.capitalize()
-            if not opts.add_snap_max:
-                defaults={'hourly': 2, 'daily': 4, 'weekly': 2, 'monthly':1}
-                opts.add_snap_max = defaults[opts.cron]
-            opts.print = False
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', '--add-snap-max', type=int, default=0,
+            help='add snapshots limited to value per subvol [1<=val<=8]')
+    parser.add_argument('-L', '--label', type=str,
+            help='add given label to -s snapshots')
+    parser.add_argument('-p', '--print', action="store_true",
+            help='print the subvolumes/snaps and exit')
+    parser.add_argument('--cron', type=str,
+            choices=('hourly', 'daily', 'weekly', 'monthly'),
+            help='install a periodic snapshot anacron job')
+    parser.add_argument('--DB', action="store_true",
+            help='add some debugging output')
+    opts = parser.parse_args()
+    if opts.add_snap_max > 0:
+        opts.add_snap_max = min(opts.add_snap_max, 8)
+    if opts.cron:
+        if not opts.label:
+            opts.label = '=' + opts.cron.capitalize()
+        if not opts.add_snap_max:
+            defaults={'hourly': 2, 'daily': 4, 'weekly': 2, 'monthly':1}
+            opts.add_snap_max = defaults[opts.cron]
+        opts.print = False
 
-        btrfs = BTRFS(opts)
-        btrfs.umount_tmps()
+    btrfs = BTRFS(opts)
+    btrfs.umount_tmps()
 
+def run():
     try:
         main()
     except KeyboardInterrupt:
@@ -719,3 +724,6 @@ if __name__ == "__main__":
         print("exception:", str(exce))
         print(traceback.format_exc())
         sys.exit(15)
+
+if __name__ == "__main__":
+    run()

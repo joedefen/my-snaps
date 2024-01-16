@@ -28,27 +28,23 @@ eos@snapshots:
 'eos@my-opt.2024-01-14-085102=Daily'
 ```
 
-**Installation.** To install into `/usr/local/bin` (which is hopefully on your PATH):
-```
-  # note: python 3.8 or later is required
-  # install git  if needed
-  cd ~  # or anywhere desired (e.g., ~/Projects)
-  git clone https://github.com/joedefen/my-snaps.git
-  ./update-tools/deploy  # NOTE: use "undeploy" script to reverse an install
-```
-* you must keep the source directory (`deploy` creates symbolic links to the tools).
-* within the source directory, run `git pull` to update to the latest
-* after install, run some tests per "Initial and Regression Testing"
+**Installation.**
+* **If `python3 -V` shows v3.11 or later, install using `pipx`**:
+* `python3 -m pip install --user pipx # if pipx not installed`
+  * `python3 -m pipx ensurepath # if needed (restart terminal)`
+  * `sudo pipx upgrade my-snaps || sudo pipx install my-snaps # to install/upgrade`
+* **Else for python3.10 and lesser versions, install using `pip`**:
+  * `sudo python3 -m pip install --upgrade my-snaps`
 
-*Note that no separately installed python modules are required.*  This adds extra code for the menus, but the benefit nothing except new `python3` incompatibilities will break the tools. Experience suggests this precaution is well justified.
+**NOTE**: after install, run some tests per "Initial and Regression Testing"
 
 ---
 
 ## my-snaps
 `my-snaps` can be used for simple snapshot maintenance. After running, it may look like this:
 
-[comment]: ![my-snaps.png](https://github.com/joedefen/update-tools/blob/main/images/my-snaps.png?raw=true)
-![my-snaps.png](images/my-snaps.png)
+![my-snaps.png](https://github.com/joedefen/my-snaps/blob/main/images/my-snaps.png?raw=true)
+<!--- ![my-snaps.png](images/my-snaps.png) -->
 
 * In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separately to remind you of the fields when needed.
 * On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create one (use one of your standard labels)
@@ -76,15 +72,15 @@ eos@snapshots:
 ## my-restore
 `my-restore` is used to restore one or more of your snapshots. When launched, you see something like this:
 
-[comment]: ![my-restore-p1.png](https://github.com/joedefen/my-snaps-tools/blob/main/images/my-restore-p1.png?raw=true)
-![my-restore-p1.png](images/my-restore-p1.png)
+![my-restore-p1.png](https://github.com/joedefen/my-snaps/blob/main/images/my-restore-p1.png?raw=true)
+<!--- ![my-restore-p1.png](images/my-restore-p1.png) --->
 
 Choose the desired BTRFS partition to mount on `/mnt` (after running `umount /mnt` if occupied).
 
 Next you'll see a screen like this:
 
-[comment]: ![my-restore-p2.png](https://github.com/joedefen/update-tools/blob/main/images/my-restore-p2.png?raw=true)
-![my-restore-p2.png](images/my-restore-p2.png)
+![my-restore-p2.png](https://github.com/joedefen/my-snaps/blob/main/images/my-restore-p2.png?raw=true)
+<!--- ![my-restore-p2.png](images/my-restore-p2.png) --->
 
 * when restoring, you are
 * if there is a backed-out version, the target subvolume will be removed,
