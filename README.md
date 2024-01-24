@@ -1,6 +1,12 @@
-# my-snaps README
-> Simple Tools for managing BTRFS snapshots
+> **Minimal Quick Start:**
+> * On python 3.11+, install `pipx`, else `pip`, and per your distro.
+> * With `pipx`, run `pipx upgrade my-snaps || pipx install my-snaps`
+> * With `pip`, run `pip install --upgrade my-snaps --user`
+> * If `~/.local/bin/` is not on your $PATH, then make it so.
+> * Run `my-snaps`; for each subvolume that you wish to snapshot, create a snapshot with `=Update` suffix (and as many as you wish to keep normally).
+> * Subsequently before updates, run `my-snaps` and type `r` (replace-all) to replace the eldest `=Update` snaps per subvolume with new snaps.
 
+# my-snaps - Simple Tools for BTRFS snapshots
 * `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates).
 * `my-restore` assists restoring snapshots to back out changes to the system
 
