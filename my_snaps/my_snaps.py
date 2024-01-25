@@ -26,7 +26,7 @@ from types import SimpleNamespace
 try:
     from PowerWindow import Window, OptionSpinner
     from MyUtils import human, ago_whence, timestamp_str
-except:
+except Exception:
     from my_snaps.PowerWindow import Window, OptionSpinner
     from my_snaps.MyUtils import human, ago_whence, timestamp_str
 
@@ -38,10 +38,12 @@ class BTRFS:
         self.tmp_dir = '/tmp/.btrfs/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
         self.devs = {}
+        self.snap_targets = [] # the potential subvols to snapshot
+        self.label_set = set() # all labels of current snapshots
         self.snap_subvol = None
         self.DB = opts.DB
         self.add_limit = opts.add_snap_max
-        self.label = None
+        self.label = None   # one label of current interest
         self.help_mode = False
         self.win = None
         self.rows = []
@@ -233,7 +235,7 @@ class BTRFS:
             win.clear()
 
     def _replace_eldest_snaps_of_subvol(self, subvol_ns, like_snaps,
-                                        ans=None, discard=1):
+                                        suffix=None, discard=1):
         """ For ONE subvolume having snapshots, remove those and create a new snapshot."""
 
         if not subvol_ns.snaps:
@@ -245,60 +247,51 @@ class BTRFS:
             subvol_ns.snaps.remove(like_snaps[0])
             like_snaps.pop(0)
             discard -= 1
-        return self._create_snap(subvol_ns, ans=ans)
+        return self._create_snap(subvol_ns, suffix=suffix)
 
 
     def _replace_eldest_snaps(self, discard=1, just_add=False):
         """ TBD """
-        ans, success = None, None
+        suffix, success = None, None
 
         if self.add_limit > 0:
-            ans = self._cur_snap_suffix()
-
-        for _ in (0, 1):
-            labels = set()
-            for dev_ns in self.devs.values():
-                # pylint: disable=redefined-argument-from-local
-                for subvol_ns in dev_ns.subvols:
-                    if subvol_ns == self.snap_subvol:
-                        continue
-                    like_snaps =  []
-                    if subvol_ns.depth != 0 or not subvol_ns.mount:
-                        continue
-                    for snap in subvol_ns.snaps:
-                        if self.label is None or snap.snap_label == self.label:
-                            like_snaps.append(snap)
-                            labels.add(snap.snap_label if snap.snap_label else "''")
-                    if ans or self.add_limit > 0:
-                        this_cnt = len(like_snaps)
-                        if self.add_limit > 0:
-                            discard = max(0, this_cnt-self.add_limit+1)
-                        elif just_add:
-                            discard = max(0, this_cnt-8+1)
-
-                        rv = self._replace_eldest_snaps_of_subvol(subvol_ns,
-                                         like_snaps, ans=ans, discard=discard)
-                        success = rv if success is None else rv if success else False
-                        self.label = None
-            if ans:
-                break
+            suffix = self._cur_snap_suffix()
+        else:
             while True:
-                ans = self.win.answer(
-                        f'Set snap suffix OR clear; labels: {",".join(list(labels))}',
-                            seed=ans if ans else self._cur_snap_suffix())
-                if ans and (len(ans) < 5 or ans[:1] != '.'
-                            or any(x in ans[1:] for x in './')):
+                suffix = self.win.answer(
+                    f'Set snap suffix OR clear; labels: {",".join(list(self.label_set))}',
+                        seed=suffix if suffix else self._cur_snap_suffix())
+                if suffix and (len(suffix) < 5 or suffix[:1] != '.'
+                            or any(x in suffix[1:] for x in './')):
                     self.win.alert(
                         'answer must be "." PLUS 4 or more characters w/o any "." or "/"')
                 else:
-                    self.label = self._get_label(ans)
+                    self.label = self._get_label(suffix)
                     break
-            if not ans:
-                break
+        if not suffix:
+            return success
+
+        counts = []
+        for subvol_ns in self.snap_targets:
+            counts.append(len(subvol_ns.label_groups.get(self.label, [])))
+
+        for subvol_ns in self.snap_targets:
+            like_snaps = subvol_ns.label_groups.get(self.label, [])
+            this_cnt = len(like_snaps)
+            if just_add:
+                discard = max(0, this_cnt-8+1)
+            else:
+                max_cnt = self.add_limit if self.add_limit else max(counts)
+                discard = max(0, this_cnt-max_cnt+1)
+
+            rv = self._replace_eldest_snaps_of_subvol(subvol_ns,
+                             like_snaps, suffix=suffix, discard=discard)
+            success = rv if success is None else rv if success else False
+        self.label = None
         return success
 
 
-    def _create_snap(self, subvol_ns=None, ans=None):
+    def _create_snap(self, subvol_ns=None, suffix=None):
         if not subvol_ns:
             subvol_ns = self.rows[self.win.pick_pos].subvol_ns
         dev_ns = self.devs[subvol_ns.dev]
@@ -315,15 +308,15 @@ class BTRFS:
             self.win.alert('Sorry, cannot create snapshot of snapshot subvolume')
             return False
 
-        if not ans:
+        if not suffix:
             seed=self._cur_snap_suffix()
-            ans = self.win.answer(
+            suffix = self.win.answer(
                 f'Set suffix for snap "{subvol_ns.path}" OR clear', seed=seed)
-        if not ans:
+        if not suffix:
             return False
 
         snap_dir = f'{dev_ns.tmp_path}{self.snap_subvol.path}'
-        snap_path = f'{snap_dir}{subvol_ns.path}{ans}'
+        snap_path = f'{snap_dir}{subvol_ns.path}{suffix}'
 
         cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
         out, err, code = self._slurp_command(cmd)
@@ -415,10 +408,10 @@ class BTRFS:
     @staticmethod
     def init_subvol_ns(dev='', path='', ident=None, parent=None):
         """ Create a subvolume namespace"""
-        return SimpleNamespace(dev=dev, path=path,
-               size=None, depth=0, mount='', snaps=[],
-                children=[], snap_label='', snap_of=None,
-                ident=ident, parent=parent, ago_str='')
+        return SimpleNamespace(dev=dev, path=path, size=None,
+                   depth=0, mount='', snaps=[], label_groups={},
+                    children=[], snap_label='', snap_of=None,
+                    ident=ident, parent=parent, ago_str='')
 
     def _mount_tmps(self):
         """ mount each btrfs as needed """
@@ -491,9 +484,14 @@ class BTRFS:
                     if mount == '/.snapshots':
                         self.snap_subvol = subvol
                     break
+        self.snap_targets = []
         for dev_ns in self.devs.values():
             dev_ns.subvols = sorted(dev_ns.subvols,
                     key=lambda x: (x.mount if x.mount else '/~~~~~~~~~~~~', x.path))
+            for subvol_ns in dev_ns.subvols:
+                if (subvol_ns != self.snap_subvol
+                        and subvol_ns.depth == 0 and subvol_ns.mount):
+                    self.snap_targets.append(subvol_ns)
 
         if self.DB:
             print('DB: --->>> after determine_mount_points()')
@@ -517,8 +515,13 @@ class BTRFS:
                 of_subvol.snaps.append(subvol)
                 of_subvol.snaps = sorted(of_subvol.snaps, key=lambda x: x.path)
                 subvol.snap_of = of_subvol
-                subvol.snap_label = self._get_label(remainder)
+                subvol.snap_label = label = self._get_label(remainder)
+                label_group = of_subvol.label_groups.get(label, [])
+                label_group.append(subvol)
+                of_subvol.label_groups[label] = label_group
+                self.label_set.add(label)
 
+        self.label_set = set()
         for subvol in self.subvol_iter():
             wds = subvol.path.split('@snapshots/', maxsplit=1)
             if len(wds) < 2:
@@ -711,6 +714,7 @@ def main():
     btrfs.umount_tmps()
 
 def run():
+    """ Entry point"""
     try:
         main()
     except KeyboardInterrupt:
