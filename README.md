@@ -35,15 +35,7 @@ eos@snapshots:
 ```
 
 **Installation.**
-* **If `python3 -V` shows v3.11 or later, install using `pipx`**:
-* `python3 -m pip install --user pipx # if pipx not installed`
-  * `python3 -m pipx ensurepath # if needed (restart terminal)`
-  * `pipx upgrade my-snaps || pipx install my-snaps`
-* **Else for python3.10 and lesser versions, install using `pip`**:
-  * `sudo python3 -m pip install --upgrade my-snaps`
-
-**NOTE**:
-* after install, run some tests per "Initial and Regression Testing"
+See the Quick Start. After install, run some tests per "Initial and Regression Testing"
 
 ---
 
@@ -88,17 +80,17 @@ Next you'll see a screen like this:
 ![my-restore-p2.png](https://github.com/joedefen/my-snaps/blob/main/images/my-restore-p2.png?raw=true)
 <!--- ![my-restore-p2.png](images/my-restore-p2.png) --->
 
-* when restoring, you are
-* if there is a backed-out version, the target subvolume will be removed,
-* else the target subvolume is renamed "subvolume.YYYY-MM-DD-HHMMSS=Reverted";
-* a new writeable snapshot for subvolume is created from the snapshot
+* Highlight and press enter on the desired choice to effect the given action:
+  * **restore**: promotes the snapshot to current
+  * **revert**: moves the reversion back to current
+  * **del**: deletes the reversion; **note**: delay deletion until a restore passes muster.
+* when done with restores, reboot the system.
+* to verify what would be done when choosing an action, you can put the tool in "dry-run" mode.
 
-* highlight and press enter the subvolumes to effect the given action:
-* **restore**: promotes the snapshot to current
-* **revert**: removes the target subvolume and moves the reverted volume tip back into place
-* **del**: deletes the reverted subvolume tip; **note**: normally delay 'del' until you have a working restore and you are done with the restore;  when done, it is best to delete the "=Reverted" subvolume (to free space).
-* **unless you see some UN-RESTORE actions list, there are no pending changes**
-* when you are done with setting up the snapshot restorals, reboot the system
+**Theory**: To restore a snapshot of the subvolume called "{subv}":
+* normally, {subv} is renamed "{subv}.YYYY-MM-DD-HHMMSS=Reverted"; buf, if already reverted, {subv} simply removed, and
+* secondly, a new, writable {subv} is created from the chosen read-only snapshot.
+
 
 **------------- IMPORTANT NOTES -------------**
 
@@ -107,12 +99,12 @@ Next you'll see a screen like this:
 * **Warning**: Failing to clean up will confuse the next `my-restore` and waste space.
 
 **When a restore is tested and deemed unsatisfactory:**
-* Launch `my-snaps` and adjust the restored snapshots as desired (e.g., try restoring a different snapshot or reverting the tip).
-* Then reboot, test, and iterate until you are done and then clean up (described immediately above).
+* Launch `my-snaps` and adjust the restored snapshots as desired (e.g., restore a different snapshot or revert the reverted tip).
+* Then reboot, test, and iterate until you are done and then clean up.
 
 **In the case that an update or restore will not boot, then**:
 * boot the live installer.
-* install these tools per the instructions (a non-sudo install is OK)
+* install these tools per the instructions.
 * use `my-restore` to return to a working system and reboot and eventually clean up the reverted subvolumes on the installed system.
 
 ---
@@ -129,8 +121,8 @@ Do not assume the BTRFS scripts work for you and then be in a pickle later. Afte
 
 If there are issues, ensure snapshots are in a subvolume ending with `@snapshots` which is normally mounted at `/.snapshots`, and snapshots are named `{subvol}.{timespec}[=Label]` where `{timespec}` has only numbers, dashes and colons.
 
-If you installed period snap scripts, ensure:
-* tests with `sudo run-parts --debug -v /etc/cron.daily` (or whichever directory)
+If you installed periodic snap scripts:
+* test with `sudo run-parts --debug -v /etc/cron.daily` (or whichever directory)
 * run `ls -ltr /tmp/.my-snaps-*` to check that it was run recently by looking at timestamps.
 
 ---
