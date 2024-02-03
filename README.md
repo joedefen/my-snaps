@@ -60,10 +60,11 @@ See the Quick Start. After install, run some tests per "Initial and Regression T
 * `-p` or `--print` dumps your top-level subvolumes and their snapshots
 * `-s{N}` or `--add-snap-max={N}` adds a new snapshot for each subvolume with snapshots and removes the eldest until there are no more than `{N}`.
 * `-l{label}` or `--label={label}` to set the label of the snapshots involved.
-* `--cron={period}` adds an anacron job to add snapshots at the given period with appropriate defaulted `-s` and `-L` or you can specify those
-  * job is stored in `/etc/cron.{period}/{period}.snaps` 
+* `--cron={period}` adds an `anacron` job to add snapshots at the given period with appropriate defaulted `-s` and `-L` or you can specify those. Notes:
+  * `anacron` must be installed ... it is usually bundled in of a `cron` package such as `cronie`.
+  * jobs are stored in `/etc/cron.{period}/{period}.snaps`. To change jobs settings, edit those or just reinstall with new options.
   * each time the job is run, its output goes to `/tmp/.my-snaps-{period}.txt`
-  * removal of the job is done manually
+  * removal of the `anacron` jobs is done manually
 
 ---
 

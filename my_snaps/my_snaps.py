@@ -101,7 +101,7 @@ class BTRFS:
         """ Add/replace an anacron job for scheduled snapshots """
         dirname = f'/etc/cron.{opts.cron}'
         if not os.path.isdir(dirname):
-            print('ERROR: {dirname!r} does not exist')
+            print(f'ERROR: {dirname!r} does not exist')
             sys.exit(-1)
         filename = os.path.join(dirname, f'{opts.cron}-snaps')
         text = '#!/bin/sh\n'
