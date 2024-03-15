@@ -135,3 +135,29 @@ If you installed periodic snap scripts:
   * create a list or script of post-install tasks to add/remove apps (save with your dotfiles or in the cloud)
 * BTW, the above complementary strategies have even more value if you have multiple installs (e.g., a desktop, a 24/7 server, and a few laptops all running similarly with the same apps an basic config).
 * For more comprehensive protection, consider `snapper`, `btrbk`, `btrfsmaintenance`, and google for others.
+
+---
+
+## Special Behavior for BTRFS + Systemd-boot + pacman + dracut
+In the titled cirumstance, BTRFS snapshots of root will not boot. Something like:
+> Booting a live installer, mounting the BTRFS subvols
+> and /efi, and running `reinstall-kernels` is needed
+> (plus some /efi cleanup).
+
+To get around that, first setup a pacman hook to copy /efi to /.efi-back when the kernel is updated:
+```
+# place in /etc/pacman.d/hooks/95-efibackup_post.hook
+[Trigger]
+Operation = Upgrade
+Operation = Install
+Operation = Remove
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+
+[Action]
+Depends = rsync
+Description = Backing up post /efi...
+When = PostTransaction
+Exec = /usr/bin/bash -c 'rsync -a -H --del /efi/ /.efi-back/'
+```
+Then, when replacing the root subvolume, /efi will be restored from its /.efi-back if that directory exists.

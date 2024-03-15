@@ -104,13 +104,16 @@ class BTRFS:
             print(f'ERROR: {dirname!r} does not exist')
             sys.exit(-1)
         filename = os.path.join(dirname, f'{opts.cron}-snaps')
-        text = '#!/bin/sh\n'
-        text += f'{sys.executable} {os.path.abspath(__file__)} -p -s{opts.add_snap_max}'
-        text += f' -L{opts.label} >/tmp/.my-snaps-{opts.cron}.txt 2>&1\n'
-        with open(filename, mode='w', encoding='utf-8') as f:
-            f.write(text)
-        os.chmod(filename, 0o755)
-        print(f'OK: to {filename!r}, wrote:\n{text}')
+        if opts.add_snap_max > 0:
+            text = '#!/bin/sh\n'
+            text += f'{sys.executable} {os.path.abspath(__file__)} -p -s{opts.add_snap_max}'
+            text += f' -L{opts.label} >/tmp/.my-snaps-{opts.cron}.txt 2>&1\n'
+            with open(filename, mode='w', encoding='utf-8') as f:
+                f.write(text)
+            os.chmod(filename, 0o755)
+            print(f'OK: to {filename!r}, wrote:\n{text}')
+        elif os.path.isfile(filename):
+            os.remove(filename)
 
     def _refresh_if_dirty(self):
         if not self.dirty:
@@ -688,7 +691,7 @@ def main():
         os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-s', '--add-snap-max', type=int, default=0,
+    parser.add_argument('-s', '--add-snap-max', type=int, default=None,
             help='add snapshots limited to value per subvol [1<=val<=8]')
     parser.add_argument('-L', '--label', type=str,
             help='add given label to -s snapshots')
@@ -700,15 +703,17 @@ def main():
     parser.add_argument('--DB', action="store_true",
             help='add some debugging output')
     opts = parser.parse_args()
-    if opts.add_snap_max > 0:
-        opts.add_snap_max = min(opts.add_snap_max, 8)
     if opts.cron:
         if not opts.label:
             opts.label = '=' + opts.cron.capitalize()
-        if not opts.add_snap_max:
-            defaults={'hourly': 2, 'daily': 4, 'weekly': 2, 'monthly':1}
+        if opts.add_snap_max is None:
+            defaults={'hourly': 2, 'daily': 2, 'weekly': 2, 'monthly':1}
             opts.add_snap_max = defaults[opts.cron]
         opts.print = False
+    if opts.add_snap_max is None:
+        opts.add_snap_max = 0
+    if opts.add_snap_max > 0:
+        opts.add_snap_max = min(opts.add_snap_max, 8)
 
     btrfs = BTRFS(opts)
     btrfs.umount_tmps()

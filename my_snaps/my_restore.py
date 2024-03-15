@@ -5,6 +5,7 @@
 
 import sys
 import os
+import glob
 import subprocess
 import re
 import traceback
@@ -24,7 +25,11 @@ class BtrfsRestore:
             os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
         self.dry_run = False
         self.filesystems = []
+        self.mounted_ids = set()
+        self.root_subvol = None
+        self.mounted_subpaths = set()
         self.slash_mnt = self.get_slash_mnt()
+        self.is_bootable = True # until proved otherwise
 
     def do_command(self, prompts, todo=None, precmd='', once=False, force=False):
         """ TBD"""
@@ -37,6 +42,7 @@ class BtrfsRestore:
                           + (' DRY-RUN' if self.dry_run else ''))
             choice = menu.get_prompt_obj()
             if choice.key == 'x':
+                self.check_bootable()
                 sys.exit(0)
             if choice.key == 'y':
                 self.dry_run = not self.dry_run
@@ -45,7 +51,7 @@ class BtrfsRestore:
             if not cmd.startswith('#'):
                 if not force and self.dry_run:
                     os.system(f'echo WOULD + {precmd!r} {cmd!r}')
-                else:
+                elif 'reboot' not in cmd or self.check_bootable():
                     os.system(f'clear;set -x; {precmd} {cmd}')
             todo = choice.next
             if once:
@@ -59,12 +65,31 @@ class BtrfsRestore:
 
         rv = SimpleNamespace(device='', fstype='')
         lines = slurp_file('/proc/mounts')
+        # /dev/mmcblk1p2 / btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=318,subvol=/eos@root 0 0
         for line in lines:
             wds = re.split(r'\s+', line)
-            if len(wds) >= 4:
-                device, mount, fstype, = wds[0], wds[1], wds[2]
-                if mount == '/mnt':
-                    rv = SimpleNamespace(device=device, fstype=fstype)
+            if len(wds) < 4:
+                continue
+            device, mount, fstype, opts_str = wds[0], wds[1], wds[2], wds[3]
+            if mount == '/mnt':
+                rv = SimpleNamespace(device=device, fstype=fstype)
+            if fstype != 'btrfs':
+                continue
+            opts, subvolid, subvol = opts_str.split(','), '', ''
+            for opt in opts:
+                wds = opt.split('=', maxsplit=1)
+                try:
+                    if wds[0] == 'subvolid':
+                        subvolid = int(wds[1])
+                    if wds[0] == 'subvol':
+                        subvol = wds[1]
+                except Exception:
+                    pass
+            if subvolid:
+                self.mounted_ids.add(subvolid)
+                if mount == '/':
+                    self.root_subvol = subvol[1:] # strip leading /
+
         return rv
 
     def select_mount(self):
@@ -90,6 +115,32 @@ class BtrfsRestore:
             cmds[str(idx)] = cmd
             todo = '0'
         todo = self.do_command(cmds, todo, once=True, force=True)
+    
+    def check_bootable(self):
+        """ Check whether /usr/lib/modules, /efi/, and /.efi-back/ agree"""
+        def get_list(folder):
+            try:
+                rv = glob.glob(f'{folder}/*')
+                rv = [os.path.basename(item) for item in rv]
+                return rv
+            except Exception:
+                return []
+        def pr(my_list):
+            return ' '.join(my_list)
+        efis = get_list('/efi/????????????????????????????????')
+        if not efis or not self.root_subvol:
+            return True
+        root = os.path.join('/mnt', self.root_subvol)
+        mods = get_list(f'{root}/usr/lib/modules')
+        backs = get_list(f'{root}/.efi-back/????????????????????????????????')
+        overlap = set(mods) & set(efis) & set(backs)
+        if not overlap and self.is_bootable:
+            print('NOT bootable (no overlap)')
+            print(f'  modules: {pr(mods)}\n  /efi: {pr(efis)}\n'
+                  + f'  /efi-back: {pr(backs)}\n  root: {root}\n  overlap: {pr(overlap)}')
+        self.is_bootable = bool(overlap)
+        return self.is_bootable
+
 
     def get_state(self):
         """ Create a dict of subvolumes that have a snapshots and/or a reverted tip """
@@ -103,11 +154,15 @@ class BtrfsRestore:
         subnames = set()
         subs = {}
         reverts = {}
+        self.mounted_subpaths = set()
         for line in lines:
-            mat = re.search(r"\bpath\s+(\S+)", line)
+            mat = re.search(r"\bID\s+(\d+)\b.*\bpath\s+(\S+)", line)
             if not mat:
                 continue
-            subpath = mat.group(1)
+            subid = int(mat.group(1))
+            subpath = mat.group(2)
+            if subid in self.mounted_ids:
+                self.mounted_subpaths.add(subpath)
             basename = os.path.basename(subpath)
             parent = os.path.dirname(subpath)
             if not parent and not basename.endswith('@snapshot'):
@@ -115,6 +170,11 @@ class BtrfsRestore:
                     reverts[basename.split('.', 1)[0]] = subpath
                 elif not '.' in basename:
                     subnames.add(basename)
+                elif basename.endswith('ToDel'):
+                    if subpath not in self.mounted_subpaths:
+                        cmd = f'btrfs sub del "{subpath}"'
+                        os.system(f'set -x; {cmd}')
+                    continue
                 continue
             if parent.endswith('@snapshots'):
                 wds = basename.split('.', 1)
@@ -139,6 +199,12 @@ class BtrfsRestore:
         def advance(key, lead):
             return Menu.get_next_key(key), ' '*len(lead)
 
+        def sync_cmd(subvol, whence):
+            sync, efi_back = '', os.path.join(whence, '.efi-back')
+            if os.path.isdir(efi_back) and subvol == self.root_subvol:
+                sync = f'rsync -a -del -H "{efi_back}/" "/efi/" && '
+            return sync
+
         # pylint: disable=too-many-branches
         os.chdir('/mnt')
         subs = self.get_state()
@@ -147,25 +213,31 @@ class BtrfsRestore:
         for subvol, ns in subs.items():
             lead = f'{subvol}'
             if ns.revert:
-                cmds[key] = [
-                    f'{lead}: revert {ns.revert}',
-                    f'btrfs sub del "{subvol}" && mv "{ns.revert}" "{subvol}"',
-                ]
+                run = sync_cmd(subvol, ns.revert)
+                if subvol in self.mounted_subpaths:
+                    run += f' mv "{subvol}" "{subvol}.ToDel" && '
+                else:
+                    run += f' btrfs sub del "{subvol}" && '
+                run += f'mv "{ns.revert}" "{subvol}"'
+                cmds[key] = [f'{lead}: revert {ns.revert}', run]
                 key, lead = advance(key, lead)
-                cmds[key] = [
-                    f'{lead}: del {ns.revert}',
-                    f'btrfs sub del "{ns.revert}"',
-                ]
-                key, lead = advance(key, lead)
-                prep = f'btrfs sub del "{subvol}" &&'
+                if ns.revert not in self.mounted_subpaths:
+                    cmds[key] = [
+                        f'{lead}: del {ns.revert}',
+                        f'btrfs sub del "{ns.revert}"',
+                    ]
+                    key, lead = advance(key, lead)
+                prep = f'btrfs sub del "{subvol}" && '
             else:
-                prep = f'mv "{subvol}" "{subvol}.{timestamp_str()}=Reverted" &&'
+                prep = f'mv "{subvol}" "{subvol}.{timestamp_str()}=Reverted" && '
 
             for snap in ns.snaps:
                 snap_base = os.path.basename(snap)
+                sync = sync_cmd(subvol, snap)
+
                 cmds[key] = [
-                    f'{lead}: restore {snap_base} {ago_whence(snap_base)}',
-                    f'{prep} btrfs sub snap "{snap}" "{subvol}"',
+                    f'{lead}: restore {snap_base} {ago_whence(snap_base)}', # prompt
+                    f'{prep}{sync}btrfs sub snap "{snap}" "{subvol}"', # actual cmd
                 ]
                 key, lead = advance(key, lead)
         cmds[key] = 'reboot now'
