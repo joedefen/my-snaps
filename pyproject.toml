@@ -12,7 +12,7 @@
 # PUBLIC Build and deploy (from project directory):
 #   ## BUMP the version (below in [project])
 #   rm -r dist; python3 -m build; ls dist/.
-#   python3 -m twine upload dist/*
+#   python3 -m twine upload dist/* # keyring --disable # may be required
 #     ## Enter __token__ and the saved TOKEN (in bitwarden)
 #   pipx upgrade my-snaps || pipx install my-snaps # >= python3.11
 #   --OR-- sudo python3 -m pip install my-snaps # <= python3.10
@@ -21,7 +21,7 @@
 # TEST Build and test (from project directory):
 #   ## BUMP the version (below in [project])
 #   rm -r dist; python3 -m build
-#   python3 -m twine upload --repository testpypi dist/*
+#   python3 -m twine upload --repository testpypi dist/* # keyring --disable # may be required
 #     ## Enter __token__ and the saved TOKEN (in bitwarden)
 #   sudo python3 -m pip install --upgrade --index-url https://test.pypi.org/simple/ --no-deps --break-system-packages my-snaps
 #   ## VISIT  https://test.pypi.org/project/my-snaps and delete old versions
@@ -31,7 +31,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-version = "1.0.4"
+version = "1.0.5"
 name = "my-snaps"
 authors = [
     {name = "Joe Defen", email = "joedef@gmail.com"},
