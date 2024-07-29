@@ -15,20 +15,16 @@ starting the window.
 # pylint: disable=global-statement,broad-exception-raised,too-many-branches
 # pylint: disable=too-many-statements,too-many-arguments
 
-import re
-import os
 import sys
+import os
+import re
 import atexit
 import traceback
 import subprocess
 import curses as cs
 from types import SimpleNamespace
-try:
-    from PowerWindow import Window, OptionSpinner
-    from MyUtils import human, ago_whence, timestamp_str
-except Exception:
-    from my_snaps.PowerWindow import Window, OptionSpinner
-    from my_snaps.MyUtils import human, ago_whence, timestamp_str
+from my_snaps.PowerWindow import Window, OptionSpinner
+from my_snaps.MyUtils import human, ago_whence, timestamp_str
 
 ##############################################################################
 
@@ -683,12 +679,24 @@ class BTRFS:
                   f' {shown_path:<{path_width}}')
 
 btrfs = None
+
+def rerun_module_as_root(module_name):
+    """ rerun using the module name """
+    if os.geteuid() != 0: # Re-run the script with sudo
+        os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        vp = ['sudo', sys.executable, '-m', module_name] + sys.argv[1:]
+        os.execvp('sudo', vp)
+
 def main():
     """ TBD """
     global btrfs
     import argparse
+    rerun_module_as_root('my_snaps.main')
     if os.geteuid() != 0: # Re-run the script with sudo
-        os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
+        module_name = 'my_snaps.main'
+        os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        vp = ['sudo', sys.executable, '-m', module_name] + sys.argv[1:]
+        os.execvp('sudo', vp)
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--add-snap-max', type=int, default=None,

@@ -5,10 +5,13 @@
 > * If `~/.local/bin/` is not on your $PATH, then make it so.
 > * Run `my-snaps`; for each subvolume that you wish to snapshot, create a snapshot with `=Update` suffix (and as many as you wish to keep normally).
 > * Subsequently before updates, run `my-snaps` and type `r` (replace-all) to replace the eldest `=Update` snaps per subvolume with new snaps.
+> * For regular balancing, run `bt-smart-balance -i` once to install `anacron` job.
 
 # my-snaps - Simple Tools for BTRFS snapshots
 * `my-snaps`  assists creating snapshots and replacing the snapshots for the simplest BTRFS use cases (e.g., just before software updates).
 * `my-restore` assists restoring snapshots to back out changes to the system
+* `bt-smart-balance` is meant to be run regularly (say weekly) to keep your BTRFS balanced.
+  Although bundled with `my-snaps`, it is unrelated to snapshots, per se.
 
 **Prerequisites.** To use these tools, you must have an appropriate BTRFS setup:
 * Your mounted top-level subvolume names must not contain '.' (i.e., periods).
@@ -139,7 +142,7 @@ If you installed periodic snap scripts:
 ---
 
 ## Special Behavior for BTRFS + Systemd-boot + pacman + dracut
-In the titled cirumstance, BTRFS snapshots of root will not boot. Something like:
+In the titled circumstance, BTRFS snapshots of root will not boot. Something like:
 > Booting a live installer, mounting the BTRFS subvols
 > and /efi, and running `reinstall-kernels` is needed
 > (plus some /efi cleanup).
@@ -161,3 +164,30 @@ When = PostTransaction
 Exec = /usr/bin/bash -c 'rsync -a -H --del /efi/ /.efi-back/'
 ```
 Then, when replacing the root subvolume, /efi will be restored from its /.efi-back if that directory exists.
+
+-- 
+
+## bt-smart-balance
+```
+bt-smart-balance [-h] [-a ALLOCATED_PCT_MIN] [-w WASTED_PCT_MIN] [-m MOUNT_POINT] [-i]
+
+options:
+  -h, --help            show this help message and exit
+  -a ALLOCATED_PCT_MIN, --allocated-pct-min ALLOCATED_PCT_MIN
+                        min allocated percent to balance [0<=val<=99]
+  -w WASTED_PCT_MIN, --wasted-pct-min WASTED_PCT_MIN
+                        min wasted percent to balance [0<=val<=99]
+  -m MOUNT_POINT, --mount-point MOUNT_POINT
+                        BTRFS mount point
+  -i, --install-anacron-job
+                        creates a script in /etc/cron.weekly with current args
+
+```
+`bt-smart-balance` starts a BTRFS balance if the wasted% or allocated% is over
+the given thresholds. It can be run manually, but suggested use is to manually run
+it only once with the `-i` option to install it as a weekly `anacron` job.
+To change balance criteria, re-run with new options.
+
+To decide to balance, it runs `sudo btrfs filesystem usage /` and calculates
+* ALLOCATED_PCT as allocated/size*100
+* WASTED_PCT as (allocated-used)/size*100

@@ -10,12 +10,8 @@ import subprocess
 import re
 import traceback
 from types import SimpleNamespace
-try:
-    from InlineMenu import Menu
-    from MyUtils import timestamp_str, ago_whence
-except:
-    from my_snaps.InlineMenu import Menu
-    from my_snaps.MyUtils import timestamp_str, ago_whence
+from my_snaps.InlineMenu import Menu
+from my_snaps.MyUtils import timestamp_str, ago_whence
 
 class BtrfsRestore:
     """ TBD """
@@ -258,10 +254,17 @@ class BtrfsRestore:
         while True:
             todo = self.select_restores(todo=todo)
 
+def rerun_module_as_root(module_name):
+    """ rerun using the module name """
+    if os.geteuid() != 0: # Re-run the script with sudo
+        os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        vp = ['sudo', sys.executable, '-m', module_name] + sys.argv[1:]
+        os.execvp('sudo', vp)
 
 def run():
     """Wrap main in try/except."""
     try:
+        rerun_module_as_root('my_snaps.my_restore')
         BtrfsRestore().main()
     except KeyboardInterrupt:
         pass

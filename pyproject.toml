@@ -1,13 +1,33 @@
 # HOW TO PUBLISH...
 #
 # Prep Work (ensure need modules are up-to-date):
-#   sudo pacman -Syu python-pip
-#   sudo pacman -Syu python-build
-#   sudo pacman -Syu python-twine
+#   sudo apt install python3-pip
+#   sudo apt install python3-pip-whl
+#   pip install build --break-system-packages
+#   sudo apt install twine
+#   -- antiquated way
+#      sudo pacman -Syu python-pip
+#      sudo pacman -Syu python-build
+#      sudo pacman -Syu python-twine
 #   -- antiquated way
 #      python3 -m pip install --upgrade pip
 #      python3 -m pip install --upgrade build
 #      python3 -m pip install --upgrade twine
+#
+# Optionally, `python3 -m venv venv`, and then
+#   - source env/bin/activate # to activate
+#   - deactivate # to deactivate
+#
+# TO RUN/TEST Locally 
+#   BEFORE build
+#       S=$PWD/src # from project dir
+#       PYTHONPATH=$S python3 src/my_snaps/main.py
+#          or bt_smart_balance.py or my_restore.py
+#       PYTHONPATH=$S python3 -m my_snaps.main
+#           or bt_smart_balance or my_restore
+#   WITH BUILD
+# rm -rf ./dist && python3 -m build && pip install -e . --break-system-packages
+#       my-snaps ; my-restore; bt_smart_balance
 # 
 # PUBLIC Build and deploy (from project directory):
 #   ## BUMP the version (below in [project])
@@ -23,45 +43,46 @@
 #   rm -r dist; python3 -m build
 #   python3 -m twine upload --repository testpypi dist/* # keyring --disable # may be required
 #     ## Enter __token__ and the saved TOKEN (in bitwarden)
-#   sudo python3 -m pip install --upgrade --index-url https://test.pypi.org/simple/ --no-deps --break-system-packages my-snaps
+#   python3 -m pip install --upgrade --index-url https://test.pypi.org/simple/ --no-deps --break-system-packages my-snaps
 #   ## VISIT  https://test.pypi.org/project/my-snaps and delete old versions
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
-version = "1.0.5"
 name = "my-snaps"
-authors = [
-    {name = "Joe Defen", email = "joedef@gmail.com"},
-]
+version = "1.0.6"
 description = "Simple BTRFS Snapshot Tools"
+authors = [
+    {name = "Joe Defen", email = "joedef@duck.com"},
+]
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.8"
-keywords = ["BTRFS", "snapshot", "restore"]
-license = "MIT"
+keywords = ["BTRFS", "snapshot", "restore", "balance", ]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux"
 ]
-dependencies = [
-    'importlib-metadata; python_version<"3.8"',
-]
-
-[project.scripts]
-my-snaps = "my_snaps.my_snaps:run"
-my-restore = "my_snaps.my_restore:run"
-
-[tool.hatch.build.targets.wheel]
-packages = ["my_snaps"]
-
-[tool.hatch.build.targets.sdist]
-exclude = [
-    "/my_snaps/__pycache__",
-]
 
 [project.urls]
 "Homepage" = "https://github.com/joedefen/my-snaps"
 "Bug Tracker" = "https://github.com/joedefen/my-snaps/issues"
+
+[project.scripts]
+my-snaps = "my_snaps.main:run"
+my-restore = "my_snaps.my_restore:run"
+bt-smart-balance = "my_snaps.bt_smart_balance:run"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+exclude = [
+    "__pycache__",
+]
