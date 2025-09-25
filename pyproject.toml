@@ -1,58 +1,10 @@
-# HOW TO PUBLISH...
-#
-# Prep Work (ensure need modules are up-to-date):
-#   sudo apt install python3-pip
-#   sudo apt install python3-pip-whl
-#   pip install build --break-system-packages
-#   sudo apt install twine
-#   -- antiquated way
-#      sudo pacman -Syu python-pip
-#      sudo pacman -Syu python-build
-#      sudo pacman -Syu python-twine
-#   -- antiquated way
-#      python3 -m pip install --upgrade pip
-#      python3 -m pip install --upgrade build
-#      python3 -m pip install --upgrade twine
-#
-# Optionally, `python3 -m venv venv`, and then
-#   - source env/bin/activate # to activate
-#   - deactivate # to deactivate
-#
-# TO RUN/TEST Locally 
-#   BEFORE build
-#       S=$PWD/src # from project dir
-#       PYTHONPATH=$S python3 src/my_snaps/main.py
-#          or bt_smart_balance.py or my_restore.py
-#       PYTHONPATH=$S python3 -m my_snaps.main
-#           or bt_smart_balance or my_restore
-#   WITH BUILD
-# rm -rf ./dist && python3 -m build && pip install -e . --break-system-packages
-#       my-snaps ; my-restore; bt_smart_balance
-# 
-# PUBLIC Build and deploy (from project directory):
-#   ## BUMP the version (below in [project])
-#   rm -r dist; python3 -m build; ls dist/.
-#   python3 -m twine upload dist/* # keyring --disable # may be required
-#     ## Enter __token__ and the saved TOKEN (in bitwarden)
-#   pipx upgrade my-snaps || pipx install my-snaps # >= python3.11
-#   --OR-- sudo python3 -m pip install my-snaps # <= python3.10
-#   ## VISIT  https://pypi.org/project/my-snaps and delete old versions
-#
-# TEST Build and test (from project directory):
-#   ## BUMP the version (below in [project])
-#   rm -r dist; python3 -m build
-#   python3 -m twine upload --repository testpypi dist/* # keyring --disable # may be required
-#     ## Enter __token__ and the saved TOKEN (in bitwarden)
-#   python3 -m pip install --upgrade --index-url https://test.pypi.org/simple/ --no-deps --break-system-packages my-snaps
-#   ## VISIT  https://test.pypi.org/project/my-snaps and delete old versions
-
 [build-system]
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["flit_core>=3.4"]
+build-backend = "flit_core.buildapi"
 
 [project]
 name = "my-snaps"
-version = "1.0.6"
+version = "1.0.7"
 description = "Simple BTRFS Snapshot Tools"
 authors = [
     {name = "Joe Defen", email = "joedef@duck.com"},
@@ -75,14 +27,3 @@ classifiers = [
 my-snaps = "my_snaps.main:run"
 my-restore = "my_snaps.my_restore:run"
 bt-smart-balance = "my_snaps.bt_smart_balance:run"
-
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-exclude = [
-    "__pycache__",
-]
