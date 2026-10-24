@@ -66,12 +66,21 @@ class Term:
 
 class Menu:
     """ A simple menu system """
-    fd = sys.stdin.fileno()
     save_attrs = None
 
     class InputTimeout(Exception):
         """ Raised for obvious reasons. """
-        
+
+    @staticmethod
+    def _fd():
+        """ The controlling terminal's file descriptor.
+
+        Resolved lazily: calling sys.stdin.fileno() at class-definition time
+        makes this module unimportable whenever stdin is not a real tty
+        (pytest, cron, a pipe, or a closed stdin).
+        """
+        return sys.stdin.fileno()
+
     @staticmethod
     def _prompt_mode(enable=False):
         """ Used to start / complete prompting the user so that we can read
@@ -79,11 +88,12 @@ class Menu:
         """
         if enable:
             if not Menu.save_attrs:
-                Menu.save_attrs = termios.tcgetattr(Menu.fd)
-                tty.setcbreak(Menu.fd)
+                fd = Menu._fd()
+                Menu.save_attrs = termios.tcgetattr(fd)
+                tty.setcbreak(fd)
         else:
             if Menu.save_attrs:
-                termios.tcsetattr(Menu.fd, termios.TCSADRAIN, Menu.save_attrs)
+                termios.tcsetattr(Menu._fd(), termios.TCSADRAIN, Menu.save_attrs)
                 Menu.save_attrs = None
 
     def __init__(self, prompts, default=None, title=''):

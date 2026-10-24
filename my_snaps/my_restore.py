@@ -13,6 +13,33 @@ from types import SimpleNamespace
 from my_snaps.InlineMenu import Menu
 from my_snaps.MyUtils import timestamp_str, ago_whence
 
+#: `btrfs filesystem show` prints either `Label: 'name'` or `Label: none`;
+#: tolerate both (and an unquoted name) instead of assuming a quoted label.
+LABEL_RE = re.compile(r"^\s*Label:\s+(?:'([^']*)'|(\S+))")
+#: `path /dev/sda1` appears in the per-device lines of each filesystem block.
+PATH_RE = re.compile(r"\bpath\s+(/dev/\S+)")
+
+def parse_filesystems(show_output):
+    """ Parse `btrfs filesystem show` into label/path entries.
+
+    Unlabelled filesystems print `Label: none`; their label becomes '' so
+    every path stays paired with its own label instead of inheriting the
+    previous filesystem's label.
+    """
+    rv, label = [], ''
+    for line in show_output.splitlines():
+        mat = LABEL_RE.match(line)
+        if mat:
+            quoted, bare = mat.group(1), mat.group(2)
+            label = quoted if quoted is not None else bare
+            if label == 'none':
+                label = ''
+            continue
+        mat = PATH_RE.search(line)
+        if mat:
+            rv.append(SimpleNamespace(label=label, path=mat.group(1)))
+    return rv
+
 class BtrfsRestore:
     """ TBD """
     def __init__(self):
@@ -89,25 +116,25 @@ class BtrfsRestore:
         return rv
 
     def select_mount(self):
-        """ TBD """
-        command_output = subprocess.check_output(['btrfs', 'filesystem', 'show']).decode('utf-8')
-        lines = command_output.split('\n')
-        self.filesystems = []
-        for line in lines:
-            mat = re.match(r"^Label:\s+('[^']*')", line)
-            if mat:
-                label = mat.group(1)
-            mat = re.search(r"\bpath\s+(/dev/\S+)", line)
-            if mat:
-                path = mat.group(1)
-                self.filesystems.append(SimpleNamespace(label=label, path=path))
+        """ Choose which BTRFS filesystem gets mounted on /mnt """
+        try:
+            command_output = subprocess.check_output(
+                ['btrfs', 'filesystem', 'show']).decode('utf-8', errors='replace')
+        except (subprocess.CalledProcessError, OSError) as e:
+            print(f'ERROR: cannot list BTRFS filesystems: {e}', file=sys.stderr)
+            sys.exit(1)
+        self.filesystems = parse_filesystems(command_output)
+        if not self.filesystems:
+            print('ERROR: no BTRFS filesystems found', file=sys.stderr)
+            sys.exit(1)
         cmds, todo, mnt = {}, '-', self.slash_mnt
         for idx, fs in enumerate(self.filesystems):
             if fs.path == mnt.device:
                 cmd = f'# KEEP {fs.path!r} mounted on /mnt'
             else:
                 cmd = 'umount /dev && ' if mnt.device else ''
-                cmd += f'mount {fs.path} /mnt # {fs.label}'
+                label = fs.label if fs.label else 'no-label'
+                cmd += f'mount {fs.path} /mnt # {label}'
             cmds[str(idx)] = cmd
             todo = '0'
         todo = self.do_command(cmds, todo, once=True, force=True)
