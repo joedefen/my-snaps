@@ -54,12 +54,22 @@ class FakeWin:
         self.handled_keys = set()
         self.alerts = []
         self.flashes = []
+        self.pick_mode = True
 
     def alert(self, message='', title='ALERT', **_kwargs):
         self.alerts.append((title, message))
 
     def flash(self, message='', duration=2.0):
         self.flashes.append((message, duration))
+
+    def clear(self):
+        pass
+
+    def set_pick_mode(self, mode):
+        self.pick_mode = mode
+
+    def render(self):
+        pass
 
 
 def test_get_label_handles_none():
@@ -660,3 +670,52 @@ def test_labeled_action_on_stale_snap_is_refused():
     assert self.win.flashes == [(
         'Cannot replace snaps of /kub@home '
         '(not a mounted top-level subvolume)', 4.0)]
+
+
+###############################################################################
+# Disk usage: ask before the slow "du" pass
+###############################################################################
+
+def make_usage_btrfs():
+    win = FakeWin()
+    self = make_btrfs(win)
+    calls = []
+    self._refresh_if_dirty = lambda: None
+    self.refresh_info = (
+        lambda body=None: calls.append(('refresh', body)))
+    self._get_disk_usage = lambda: calls.append('du')
+    return self, calls
+
+
+def test_disk_usage_asks_before_running_du():
+    self, calls = make_usage_btrfs()
+
+    assert self._confirm_disk_usage() is True
+    assert self.confirm.active is True
+    assert self.confirm.mode == 'y'
+    assert self._confirm_prompt == 'Gather disk usage (can take quite a while)?'
+    assert calls == []
+
+
+def test_disk_usage_esc_runs_nothing():
+    self, calls = make_usage_btrfs()
+
+    self._confirm_disk_usage()
+    self.handle_confirm_key(27)  # ESC
+
+    assert self.confirm.active is False
+    assert calls == []
+
+
+def test_disk_usage_y_runs_du_and_redraws():
+    self, calls = make_usage_btrfs()
+
+    self._confirm_disk_usage()
+    self.handle_confirm_key(ord('y'))
+
+    assert calls == [
+        ('refresh', ' ... BE REALLY PATIENT (running "du") ...'),
+        'du',
+        ('refresh', None),
+    ]
+    assert self.win.pick_mode is True

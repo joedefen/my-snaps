@@ -79,7 +79,6 @@ def test_parse_subvol_list():
 
 def test_scan_block_devices_falls_back_to_blkid():
     self = BTRFS.__new__(BTRFS)
-    self.dev_records = []
     calls = []
 
     def slurp(cmd):
@@ -98,9 +97,29 @@ def test_scan_block_devices_falls_back_to_blkid():
                      'PATH': '/dev/sda1', 'NAME': 'sda1'}]
 
 
-def test_scan_block_devices_scans_only_once():
+def test_scan_block_devices_caches_only_the_slow_blkid_fallback():
+    """ `blkid` probes media; without lsblk it must not run on every refresh. """
     self = BTRFS.__new__(BTRFS)
-    self.dev_records = []
+    self.blkid_records = None
+    calls = []
+
+    def slurp(cmd):
+        calls.append(cmd)
+        if cmd[0] == 'lsblk':
+            return [], [], 1
+        return ['/dev/sda1: LABEL="x" TYPE="btrfs"'], [], 0
+
+    self._slurp_command = slurp
+
+    self._scan_block_devices()
+    self._scan_block_devices()
+
+    assert [cmd[0] for cmd in calls] == ['lsblk', 'blkid', 'lsblk']
+
+
+def test_scan_block_devices_rescans_on_every_call():
+    """ A device hot-plugged after startup must be visible without a restart. """
+    self = BTRFS.__new__(BTRFS)
     calls = []
 
     def slurp(cmd):
@@ -112,13 +131,30 @@ def test_scan_block_devices_scans_only_once():
     self._scan_block_devices()
     self._scan_block_devices()
 
-    assert len(calls) == 1
+    assert len(calls) == 2
+
+
+def test_load_mounts_rereads_proc_mounts():
+    """ Later mounts must not be hidden by a copy cached at startup. """
+    self = BTRFS.__new__(BTRFS)
+    reads = []
+
+    def slurp(pathname):
+        reads.append(pathname)
+        return ['/dev/sda1 / btrfs rw,subvolid=5,subvol=/ 0 0']
+
+    self._slurp_file = slurp
+
+    self._load_mounts()
+    self._load_mounts()
+
+    assert reads == ['/proc/mounts', '/proc/mounts']
 
 
 def test_load_devs_only_keeps_btrfs_devices():
     self = BTRFS.__new__(BTRFS)
     self.DB = False
-    self.dev_records = [
+    records = [
         {'NAME': 'sda1', 'PATH': '/dev/sda1', 'TYPE': 'part',
          'FSTYPE': 'ext4', 'LABEL': '', 'UUID': 'e'},
         # an optical drive must never be scanned (it can block for seconds)
@@ -127,6 +163,7 @@ def test_load_devs_only_keeps_btrfs_devices():
         {'NAME': 'nvme0n1p2', 'PATH': '/dev/nvme0n1p2', 'TYPE': 'part',
          'FSTYPE': 'btrfs', 'LABEL': 'btrfs-common', 'UUID': 'b'},
     ]
+    self._scan_block_devices = lambda: records
     self._slurp_command = lambda cmd: (['Filesystem  Size', 'df-line'], [], 0)
 
     self._load_devs()
@@ -137,6 +174,49 @@ def test_load_devs_only_keeps_btrfs_devices():
     assert dev_ns.label == 'btrfs-common'
     assert dev_ns.uuid == 'b'
     assert dev_ns.diskfree == 'df-line'
+    assert self.dev_fingerprint == BTRFS._fingerprint_records(records)
+
+
+###############################################################################
+# Idle poll
+###############################################################################
+
+def _poll_btrfs(records, mounts=()):
+    self = BTRFS.__new__(BTRFS)
+    self.dirty = False
+    self.dev_fingerprint = BTRFS._fingerprint_records(records)
+    self.mount_fingerprint = BTRFS._mount_fingerprint(mounts)
+    self._scan_block_devices = lambda: records
+    self._all_mounts = lambda: list(mounts)
+    return self
+
+
+def test_poll_device_changes_ignores_an_unchanged_inventory():
+    records = [{'NAME': 'sda1', 'PATH': '/dev/sda1', 'FSTYPE': 'btrfs'}]
+    self = _poll_btrfs(records)
+
+    assert self._poll_device_changes() is False
+    assert self.dirty is False
+
+
+def test_poll_device_changes_dirties_model_on_hotplug():
+    records = [{'NAME': 'sda1', 'PATH': '/dev/sda1', 'FSTYPE': 'btrfs'}]
+    self = _poll_btrfs(records)
+    self._scan_block_devices = lambda: records + [
+        {'NAME': 'sdb1', 'PATH': '/dev/sdb1', 'FSTYPE': 'btrfs'}]
+
+    assert self._poll_device_changes() is True
+    assert self.dirty is True
+
+
+def test_poll_device_changes_dirties_model_on_a_new_mount():
+    records = [{'NAME': 'sda1', 'PATH': '/dev/sda1', 'FSTYPE': 'btrfs'}]
+    self = _poll_btrfs(records)
+    self._all_mounts = lambda: [
+        ('/dev/sda1', '/.snapshots', 'btrfs', '256', '/@snapshots')]
+
+    assert self._poll_device_changes() is True
+    assert self.dirty is True
 
 
 ###############################################################################

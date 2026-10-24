@@ -34,6 +34,16 @@ from my_snaps.MyUtils import (human, ago_whence, timestamp_str,
 
 class BTRFS:
     """ TBD """
+
+    # How long the TUI waits for a keystroke before it checks for a
+    # hot-plugged device or a new mount (see _poll_device_changes).
+    IDLE_POLL_SECONDS = 60
+
+    # Set only on systems without lsblk: `blkid` probes every medium and can
+    # stall for seconds, so its result is cached for the process.  The normal
+    # `lsblk` path is rescanned on every refresh (see _scan_block_devices).
+    blkid_records = None
+
     def __init__(self, opts):
         self.tmp_dir = '/tmp/.btrfs/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
@@ -65,8 +75,12 @@ class BTRFS:
         # curses owns the screen) so logs/cron output stay clean.
         self.show_progress = bool(getattr(sys.stderr, 'isatty', lambda: False)())
 
-        self.dev_records = [] # device scan, to avoid rescanning on refresh
-        self.mounts_lines = [] # to avoid rereading "/proc/mounts" on refresh
+        # Fingerprints of the last full refresh, used by the idle poll to tell
+        # whether a hot-plugged device or a new BTRFS mount appeared.  They are
+        # deliberately not caches: every dirty refresh re-reads lsblk and
+        # /proc/mounts, so an action never works from a stale device list.
+        self.dev_fingerprint = None
+        self.mount_fingerprint = None
 
         atexit.register(self.umount_tmps)
 
@@ -220,15 +234,19 @@ class BTRFS:
                 if key is not None:
                     self.handle_confirm_key(key)
                 return None
+            if key is None:
+                # prompt() woke on its idle timeout (or a resize) without a
+                # keystroke: look for hot-plugged devices or new mounts.
+                self._poll_device_changes()
+                return None
             value = spin.do_key(key, win)
             if key in (ord('u'), ) and not self.help_mode:
-                win.clear()
-                win.set_pick_mode(False)
-                self.refresh_info(body=' ... BE REALLY PATIENT (running "du") ...')
-                win.render()
-                self._get_disk_usage()
-                win.set_pick_mode(True)
-                self.refresh_info()
+                self._confirm_disk_usage()
+
+            elif key in (ord('f'), ) and not self.help_mode:
+                # "freshen": rebuild devices, mounts and subvolume trees on the
+                # next loop iteration (refresh_info() runs right after do_key).
+                self.dirty = True
 
             elif key in (ord('r'), ) and not self.help_mode:
                 self._replace_eldest_snaps()
@@ -260,7 +278,8 @@ class BTRFS:
         spin.add_key('help_mode', '? - toggle help screen', vals=[False, True], obj=self)
 
         base_keys_we_handle=[cs.KEY_ENTER,
-                10, ord('s'), ord('d'), ord('u'), ord('r'), ord('a'), ord('x')]
+                10, ord('s'), ord('d'), ord('u'), ord('f'), ord('r'), ord('a'),
+                ord('x')]
 
         win = self.win = ConsoleWindow(opts=ConsoleWindowOpts(
             keys=set(list(spin.keys) + list(base_keys_we_handle))))
@@ -273,18 +292,22 @@ class BTRFS:
                 self.win.add_body('Action keys:', attr=cs.A_UNDERLINE)
                 self.win.add_body(' d - delete highlighted item')
                 self.win.add_body(' s - create snapshot for highlighted item')
-                self.win.add_body(' u - compute "du" for all subvols (very slow)')
                 self.win.add_body(' r - replace eldest snapshot of each subvol')
                 self.win.add_body('     (on a labeled snapshot: that label only)')
                 self.win.add_body(' a - add snapshot to each subvol with snapshots')
                 self.win.add_body('     (on a labeled snapshot: that label only)')
+                self.win.add_body(' u - gather disk usage (slow; asks first)')
+                self.win.add_body(' f - freshen device and mount discovery')
                 self.win.add_body(' x - exit')
             else:
                 win.set_pick_mode(True)
                 self.refresh_info()
             win.render()
             try:
-                _ = do_key(win.prompt(seconds=300))
+                # The idle timeout is our device poll: after this many seconds
+                # without a keystroke, look for a hot-plugged disk or a new
+                # mount instead of waiting for a restart.
+                _ = do_key(win.prompt(seconds=self.IDLE_POLL_SECONDS))
             except Exception as exce:
                 win.stop_curses()
                 print("exception:", str(exce))
@@ -614,6 +637,30 @@ class BTRFS:
             self.dirty = True
         return True
 
+    def _confirm_disk_usage(self):
+        """ Ask before the slow `btrfs fi du` pass (it can take minutes). """
+        return self._begin_confirm(
+            'Gather disk usage (can take quite a while)?',
+            mode='y', action_type='usage',
+            on_confirm=self._gather_disk_usage)
+
+    def _gather_disk_usage(self, answer='y'):
+        """ Run an accepted `du` pass, then redraw the listing with sizes. """
+        if not answer.strip().lower().startswith('y'):
+            return False
+        win = self.win
+        if win:
+            win.clear()
+            win.set_pick_mode(False)
+            self.refresh_info(
+                body=' ... BE REALLY PATIENT (running "du") ...')
+            win.render()
+        self._get_disk_usage()
+        if win:
+            win.set_pick_mode(True)
+            self.refresh_info()
+        return True
+
     def _slurp_command(self, command, cwd=None):
         """ Run an argv list; return (stdout, stderr, exit code).
 
@@ -678,22 +725,59 @@ class BTRFS:
         sysfs plus the udev database in a few milliseconds, so it is the
         primary source; `blkid` stays as a fallback for the (unlikely) case
         of a system without lsblk.
+
+        The scan is *not* cached: it runs once per refresh (a few
+        milliseconds), so a device hot-plugged after startup is visible
+        without restarting the tool.  The exception is the `blkid` fallback,
+        whose result is kept (see `blkid_records`) because probing media is
+        what makes it slow in the first place.
         """
-        if self.dev_records:
-            return self.dev_records
         out, _, code = self._slurp_command(
             ['lsblk', '-P', '-o', self.LSBLK_FIELDS])
         if code == 0 and out:
-            self.dev_records = [self.parse_lsblk_line(line) for line in out]
-        else:
+            self.blkid_records = None  # lsblk is back; drop the slow cache
+            return [self.parse_lsblk_line(line) for line in out]
+        if self.blkid_records is None:
             out, _, _ = self._slurp_command(['blkid'])
-            self.dev_records = [self.parse_blkid_line(line) for line in out]
-        return self.dev_records
+            self.blkid_records = [self.parse_blkid_line(line) for line in out]
+        return self.blkid_records
+
+    @staticmethod
+    def _fingerprint_records(records):
+        """ Stable identity of a block-device scan (no media probing). """
+        return tuple(sorted(
+            (rec.get('NAME') or os.path.basename(rec.get('PATH', '')),
+             rec.get('FSTYPE', ''), rec.get('UUID', ''), rec.get('LABEL', ''))
+            for rec in records))
+
+    @staticmethod
+    def _mount_fingerprint(mounts):
+        """ The (device, mountpoint) pairs of the BTRFS mounts in `mounts`. """
+        return tuple((dev, mount) for dev, mount, fstype, _ident, _subvol
+                     in mounts if fstype == 'btrfs')
+
+    def _poll_device_changes(self):
+        """ Dirty the model when a device or BTRFS mount appeared/disappeared.
+
+        Called on prompt timeouts only (see `_start_window`), never in a loop:
+        a few milliseconds of `lsblk` and `/proc/mounts` is enough to notice a
+        hot-plugged disk, and the expensive rebuild (`btrfs sub list`, `df`,
+        mounting) runs on the next refresh only when something changed.
+        """
+        records = self._scan_block_devices()
+        if (self._fingerprint_records(records) != self.dev_fingerprint
+                or self._mount_fingerprint(self._all_mounts())
+                != self.mount_fingerprint):
+            self.dirty = True
+            return True
+        return False
 
     def _load_devs(self):
         """ Discover all the BTRFS Devices (no probing, see _scan_block_devices) """
+        records = self._scan_block_devices()
+        self.dev_fingerprint = self._fingerprint_records(records)
         self.devs = {}
-        for rec in self._scan_block_devices():
+        for rec in records:
             if rec.get('FSTYPE') != 'btrfs' or rec.get('TYPE') == 'rom':
                 continue
             dev = rec.get('NAME') or os.path.basename(rec.get('PATH', ''))
@@ -801,10 +885,13 @@ class BTRFS:
                 subprocess.run(['umount', tmp_path], check=False)
 
     def _load_mounts(self):
-        """ Read "/proc/mounts" once per process. """
-        if not self.mounts_lines:
-            self.mounts_lines = self._slurp_file('/proc/mounts')
-        return self.mounts_lines
+        """ Read "/proc/mounts" afresh on every call.
+
+        Mounts appear while the tool runs (e.g. `/.snapshots` after a manual
+        mount, or a USB disk); a copy cached at startup made those later
+        mounts invisible until the next restart.
+        """
+        return self._slurp_file('/proc/mounts')
 
     @staticmethod
     def parse_mount_line(line):
@@ -834,7 +921,9 @@ class BTRFS:
         return rv
 
     def _determine_mount_points(self):
-        for _dev, mount, fstype, ident, _subvol in self._all_mounts():
+        mounts = self._all_mounts()
+        self.mount_fingerprint = self._mount_fingerprint(mounts)
+        for _dev, mount, fstype, ident, _subvol in mounts:
             if mount == '/' and fstype != 'btrfs':
                 assert False, f'root is not BTRFS ({mount}, {fstype})'
             if fstype != 'btrfs' or ident is None:
@@ -1014,8 +1103,8 @@ class BTRFS:
         mounts_width = self.calc_mounts_width()
         devs_width = self.calc_devs_width()
 
-        win.add_fancy_header('MY-SNAPS'
-            '  [s]:+snap [d]:-subvol [u]:disk-usage [r]eplace-all [a]dd-all [x]:exit [?]:help',
+        win.add_fancy_header('MY-SNAPS  [s]:+snap [d]:-subvol [r]eplace-all'
+             + ' [a]dd-all [u]sage [f]reshen [x]:exit [?]:help',
             mode='Underline')
         for dev_ns in self.devs.values():
             win.add_header(f'df: {dev_ns.diskfree}', attr=cs.A_DIM)
