@@ -14,10 +14,8 @@ jobs:
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      # Start with one interpreter. Expand the matrix after the remaining
-      # audit fixes and the packaging metadata have settled.
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - name: Check out repository
@@ -34,8 +32,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
-      - name: Lint
+      - name: Lint with Ruff
+        run: python -m ruff check .
+
+      - name: Lint with Pylint
         run: python -m pylint my_snaps
 
-      - name: Run tests
-        run: python -m pytest -v
+      - name: Run tests with coverage
+        run: >-
+          python -m pytest -v
+          --cov=my_snaps
+          --cov-report=term-missing
+          --cov-fail-under=80

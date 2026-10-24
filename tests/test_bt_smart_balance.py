@@ -6,10 +6,11 @@ replaced with a fake that records the argv lists it receives.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import mock_open
 
+import my_snaps.bt_smart_balance as bsb
 import pytest
-
-from my_snaps.bt_smart_balance import MIN_DUSAGE, BtSmartBalance
+from my_snaps.bt_smart_balance import MIN_DUSAGE, BtSmartBalance, parse_args
 
 
 def make_tool(**overrides):
@@ -177,3 +178,172 @@ def test_cron_script_forwards_dusage_and_quotes_mount_point():
 def test_cron_script_clamps_dusage():
     tool = make_tool(dusage=0)
     assert f"-d {MIN_DUSAGE}" in tool.cron_script()
+
+
+# --- command execution -----------------------------------------------------
+
+def test_run_does_not_prepend_sudo_when_already_root(monkeypatch):
+    tool = make_tool()
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bsb.subprocess, "run", fake_run)
+    monkeypatch.setattr(bsb.os, "geteuid", lambda: 0)
+
+    result = tool._run(["filesystem", "usage", "/"])
+
+    assert result.returncode == 0
+    assert calls == [(["btrfs", "filesystem", "usage", "/"],
+                      {"capture_output": True, "text": True, "check": False})]
+
+
+def test_run_prepends_sudo_for_a_normal_user(monkeypatch):
+    tool = make_tool()
+    calls = []
+    monkeypatch.setattr(
+        bsb.subprocess, "run",
+        lambda argv, **kwargs: calls.append(list(argv))
+        or SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(bsb.os, "geteuid", lambda: 1000)
+
+    tool._run(["balance", "status", "/"])
+
+    assert calls == [["sudo", "btrfs", "balance", "status", "/"]]
+
+
+def test_get_bt_usage_returns_stdout(monkeypatch):
+    tool = make_tool()
+    monkeypatch.setattr(
+        tool, "_run",
+        lambda _args: SimpleNamespace(returncode=0, stdout="usage",
+                                      stderr=""))
+
+    assert tool.get_bt_usage() == "usage"
+
+
+def test_get_bt_usage_reports_a_failing_command(monkeypatch, capsys):
+    tool = make_tool()
+    monkeypatch.setattr(
+        tool, "_run",
+        lambda _args: SimpleNamespace(returncode=2, stdout="",
+                                      stderr="not btrfs"))
+
+    assert tool.get_bt_usage() is None
+    assert "not btrfs" in capsys.readouterr().err
+
+
+def test_get_bt_usage_reports_a_missing_binary(monkeypatch, capsys):
+    tool = make_tool()
+
+    def boom(_args):
+        raise OSError("btrfs: not found")
+
+    monkeypatch.setattr(tool, "_run", boom)
+
+    assert tool.get_bt_usage() is None
+    assert "btrfs: not found" in capsys.readouterr().err
+
+
+def test_parse_usage_data_converts_terabytes_and_ignores_small_units():
+    tool = make_tool()
+
+    tool.parse_usage_data(
+        "Device size: 10.00GiB\n"
+        "Device allocated: 1.50TiB\n"
+        "Used: 500.00MiB\n")
+
+    assert tool.device_size == 10.0
+    assert tool.allocated == 1536.0
+    assert tool.used == 0.0
+
+
+def test_parse_usage_data_defaults_missing_fields_to_zero():
+    tool = make_tool()
+    tool.parse_usage_data("Device size: 10.00GiB\n")
+    assert tool.allocated == 0.0
+    assert tool.used == 0.0
+
+
+@pytest.mark.parametrize("status,returncode,expected", [
+    ("No balance found on '/'\n", 0, False),
+    ("Balance on '/' is running\n", 0, True),
+    ("", 1, False),
+])
+def test_is_balance_running(status, returncode, expected, monkeypatch):
+    tool = make_tool()
+    monkeypatch.setattr(
+        tool, "_run",
+        lambda _args: SimpleNamespace(returncode=returncode, stdout=status,
+                                      stderr=""))
+
+    assert tool.is_balance_running() is expected
+
+
+def test_is_balance_running_is_false_when_btrfs_is_missing(monkeypatch):
+    tool = make_tool()
+
+    def boom(_args):
+        raise OSError("btrfs")
+
+    monkeypatch.setattr(tool, "_run", boom)
+    assert tool.is_balance_running() is False
+
+
+def test_install_cron_job_writes_an_executable_script(monkeypatch, capsys):
+    tool = make_tool(mount_point="/mnt/my data", dusage=5)
+    opened = mock_open()
+    chmod_calls = []
+    monkeypatch.setattr(bsb.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr("builtins.open", opened)
+    monkeypatch.setattr(
+        bsb.os, "chmod",
+        lambda path, mode: chmod_calls.append((path, mode)))
+
+    tool.install_cron_job()
+
+    opened.assert_called_once_with(
+        "/etc/cron.weekly/bt-smart-balance-job", mode="w", encoding="utf-8")
+    opened().write.assert_called_once_with(tool.cron_script())
+    assert chmod_calls == [
+        ("/etc/cron.weekly/bt-smart-balance-job", 0o755)]
+    assert "OK: to" in capsys.readouterr().out
+
+
+def test_install_cron_job_refuses_a_missing_directory(monkeypatch, capsys):
+    tool = make_tool()
+    monkeypatch.setattr(bsb.os.path, "isdir", lambda _path: False)
+
+    with pytest.raises(SystemExit) as caught:
+        tool.install_cron_job()
+
+    assert caught.value.code == -1
+    assert "does not exist" in capsys.readouterr().out
+
+
+# --- argument parsing ------------------------------------------------------
+
+def test_parse_args_clamps_percentages_and_dusage():
+    opts = parse_args(["-a", "-5", "-w", "500", "-d", "500"])
+
+    assert opts.allocated_pct_min == 0
+    assert opts.wasted_pct_min == 99
+    assert opts.dusage == 99
+
+
+def test_parse_args_refuses_an_unbounded_dusage(capsys):
+    with pytest.raises(SystemExit) as caught:
+        parse_args(["-d", "0"])
+
+    assert caught.value.code == 2
+    assert "full balance" in capsys.readouterr().err
+
+
+def test_parse_args_refuses_a_missing_mount_point(capsys):
+    with pytest.raises(SystemExit) as caught:
+        parse_args(["-m", "/definitely/not/a/directory"])
+
+    assert caught.value.code == 2
+    assert "not a directory" in capsys.readouterr().err

@@ -7,7 +7,6 @@ now lives in `Menu.ARROW_DELTAS`, which is pure and testable without a tty.
 from __future__ import annotations
 
 import pytest
-
 from my_snaps.InlineMenu import Menu
 
 

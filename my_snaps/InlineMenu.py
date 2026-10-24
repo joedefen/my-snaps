@@ -27,11 +27,11 @@ Create the menu by passing in:
     - next: the next key
 """
 
+import shutil
+import signal
 import sys
 import termios
 import tty
-import shutil
-import signal
 from types import SimpleNamespace
 from typing import ClassVar
 

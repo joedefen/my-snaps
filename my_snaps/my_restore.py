@@ -2,15 +2,15 @@
 """ Restore BTRFS subvolumes from their snapshots. """
 
 import argparse
-import sys
 import os
-import subprocess
 import re
+import subprocess
+import sys
 import traceback
 from types import SimpleNamespace
+
 from my_snaps.InlineMenu import Menu
-from my_snaps.MyUtils import (timestamp_str, ago_whence,
-                              reexec_as_root, version_string)
+from my_snaps.MyUtils import ago_whence, reexec_as_root, timestamp_str, version_string
 
 #: `btrfs filesystem show` prints either `Label: 'name'` or `Label: none`;
 #: tolerate both (and an unquoted name) instead of assuming a quoted label.

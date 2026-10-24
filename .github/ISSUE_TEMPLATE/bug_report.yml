@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible problem with my-snaps, my-restore or bt-smart-balance
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. This is a personal,
+        Linux-only, BTRFS-only tool, so please include the distribution and
+        filesystem layout details below.
+
+        Do **not** paste secrets, passphrases or private data. For security
+        issues, use the GitHub Security tab as described on the issue chooser.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `my-snaps ...`
+        2. Press ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `my-snaps --version` (or the commit hash).
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Output of `python --version`.
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and kernel
+      description: e.g. Fedora 41, kernel 6.12.0.
+  - type: textarea
+    id: btrfs
+    attributes:
+      label: BTRFS layout
+      description: Relevant `btrfs subvolume list`, `findmnt` or `btrfs filesystem show` output, with paths redacted if needed.
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or traceback
+      description: Paste the command output or traceback. Redact anything private.
+      render: shell

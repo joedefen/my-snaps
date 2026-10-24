@@ -16,8 +16,8 @@ Keep it as a **personal, opinionated tool**. The last correctness item is fixed:
 ## What the project is, in evidence
 
 - 2,751 lines across five modules ([`main.py`](my_snaps/main.py) 1,477; [`my_restore.py`](my_snaps/my_restore.py) 521; [`InlineMenu.py`](my_snaps/InlineMenu.py) 437; [`bt_smart_balance.py`](my_snaps/bt_smart_balance.py) 208; [`MyUtils.py`](my_snaps/MyUtils.py) 108), one runtime dependency, MIT.
-- A `pytest` suite in [`tests/`](tests) and one GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml#L1)) that runs `pylint` and `pytest` on Python 3.11 only.
-- No git tags, no changelog, no `SECURITY.md`, no issue templates, no man page.
+- A `pytest` suite in [`tests/`](tests) and one GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml#L1)) that runs Ruff and Pylint plus `pytest` with coverage on Python 3.11–3.13.
+- No git tags and no changelog. Bug and feature issue forms live in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE), with security reports routed to GitHub's private advisory form and questions to GitHub Discussions. A `SECURITY.md` file and a man page are intentionally out of scope.
 - [`pyproject.toml`](pyproject.toml#L9) declares 2.0.0, `requires-python = ">=3.11"`, and a dependency range of `console-window >= 2.0.0.10, <3`; nothing in the repository ties that version to a released commit.
 - Three console scripts: `my-snaps`, `my-restore`, `bt-smart-balance`.
 
@@ -43,7 +43,9 @@ Keep it as a **personal, opinionated tool**. The last correctness item is fixed:
 
 ### P2 — maintenance and discoverability
 
-- [`.github/workflows/ci.yml`](.github/workflows/ci.yml#L1) runs `pylint` and `pytest` on Python 3.11 alone, with no ruff step. Tags, changelog, `SECURITY.md`, issue templates, and a man page are still missing.
+- ~~[`.github/workflows/ci.yml`](.github/workflows/ci.yml#L1) ran `pylint` and `pytest` on Python 3.11 alone, with no ruff step.~~ **Done 2026-10-24:** CI now runs `ruff check`, `pylint`, and `pytest` with `--cov=my_snaps --cov-fail-under=80` on Python 3.11, 3.12, and 3.13. The suite covers 95% of statements.
+- ~~No issue templates.~~ **Done 2026-10-24:** bug and feature forms are in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE); the chooser links security reports to GitHub's private advisory form and questions to GitHub Discussions. `SECURITY.md` and a man page are deliberately not planned.
+- Git tags and a changelog are still missing; the repository has no anchor for the 2.0.0 version in [`pyproject.toml`](pyproject.toml#L9).
 - ~~The GitHub description (“Basic upgrade and BTRFS tools for Fedora and EOS”) no longer matches the PyPI summary (“Simple BTRFS Snapshot Tools”).~~ **Done:** the repository description now matches the PyPI summary.
 - No tag or changelog anchors the 2.0.0 version in [`pyproject.toml`](pyproject.toml#L9); `runner` is a debug convenience, not a test harness.
 - ~~License metadata is still the old `license = { text = "MIT" }` form ([`pyproject.toml`](pyproject.toml#L15)); it works, but modern PEP 639 metadata is cleaner.~~ **Done 2026-10-24:** [`pyproject.toml`](pyproject.toml#L15) now uses the PEP 639 SPDX expression `license = "MIT"` plus `license-files = ["LICENSE"]`, and drops the deprecated `License ::` classifier. `flit_core>=3.12` in [`pyproject.toml`](pyproject.toml#L4) is required for those keys. Verified by building both artifacts: the wheel and sdist carry `Metadata-Version: 2.4`, `License-Expression: MIT`, `License-File: LICENSE`, and bundle the license at `*.dist-info/licenses/LICENSE`.
@@ -93,7 +95,7 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 ## Minimum fix list, in order
 
 1. ~~**Deduplicate multi-device filesystems** in [`_load_devs()`](my_snaps/main.py#L854), keying devices by filesystem UUID so a filesystem is mounted and counted once rather than once per member.~~ **Done:** [`_load_devs()`](my_snaps/main.py#L868) groups by UUID and aliases every member name; [`tests/test_device_scan.py`](tests/test_device_scan.py#L185) asserts a two-member filesystem produces one entry and one `df` call.
-2. **Extend CI:** add a ruff step, run the matrix on 3.11–3.13, tag the release that matches 2.0.0, and add a CHANGELOG. (The stale GitHub description is already updated.)
-3. **Add project hygiene:** `SECURITY.md`, issue templates, and a man page. (PEP 639 license metadata is done.)
+2. ~~**Extend CI:** add a ruff step and run the matrix on 3.11–3.13.~~ **Done:** CI runs Ruff, Pylint, and coverage-gated tests on all three interpreters. Tagging 2.0.0 and adding a CHANGELOG remain.
+3. ~~**Add project hygiene:** issue templates.~~ **Done:** bug/feature forms and the security/discussion contact links are in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE). `SECURITY.md` and a man page are intentionally not planned.
 
-The remaining work is the P2 packaging/hygiene list; item 1 is implemented and covered by tests.
+The remaining work is a release tag and a changelog. Items 1–3 are implemented and covered by tests; the suite reports 95% statement coverage.

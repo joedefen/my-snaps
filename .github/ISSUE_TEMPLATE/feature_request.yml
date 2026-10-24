@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an improvement to my-snaps, my-restore or bt-smart-balance
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is deliberately small and opinionated: no daemon, no
+        config file and no extra runtime dependencies. Requests that fit that
+        scope are the easiest to accept.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the workflow or pain point, not just the proposed implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the tool do differently?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other tools or workarounds you have tried (snapper, btrbk, yabsnap, ...).
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope check
+      description: Does this require a daemon, a config file, a new dependency or a non-BTRFS filesystem?

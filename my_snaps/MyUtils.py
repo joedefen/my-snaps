@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Shared utilities for the my-snaps tools.
 """
@@ -10,6 +9,7 @@ import sys
 import time
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
+
 
 ##############################################################################
 def timestamp_str():

@@ -26,8 +26,6 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
-import pytest
-
 from my_snaps import my_restore
 
 ROOT = 'eos@root'

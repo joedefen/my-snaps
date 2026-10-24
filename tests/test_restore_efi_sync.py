@@ -25,7 +25,6 @@ import os
 from types import SimpleNamespace
 
 import pytest
-
 from my_snaps import my_restore
 
 ROOT = 'eos@root'

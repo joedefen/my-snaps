@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 BTRFS snapshot tool implementing the simplest snapshot strategy; i.e.,
   * replace eldest snapshots with new ones before updates, and
@@ -14,19 +13,19 @@ starting the window.
 # pylint: disable=too-many-lines
 
 import argparse
-import sys
+import atexit
+import curses as cs
 import os
 import re
 import shlex
-import atexit
-import traceback
 import subprocess
-import curses as cs
+import sys
+import traceback
 from types import SimpleNamespace
-from console_window import (ConsoleWindow, ConsoleWindowOpts,
-                            InlineConfirmation, OptionSpinner)
-from my_snaps.MyUtils import (human, ago_whence, timestamp_str,
-                              reexec_as_root, version_string)
+
+from console_window import ConsoleWindow, ConsoleWindowOpts, InlineConfirmation, OptionSpinner
+
+from my_snaps.MyUtils import ago_whence, human, reexec_as_root, timestamp_str, version_string
 
 # `a` (add-all) keeps at most this many snapshots of one label per subvolume
 # in the TUI.  It is a convenience default, not a hard limit: `-k/--keep`
@@ -772,7 +771,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
     @staticmethod
     def _slurp_file(pathname):
-        with open(pathname, "r", encoding='utf-8') as fh:
+        with open(pathname, encoding='utf-8') as fh:
             return [line.strip() for line in fh]
 
     @staticmethod
@@ -1189,7 +1188,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         is also collected into `label_groups` so retention can count per
         label.
         """
-        def link(of_subvol, subvol):
+        def link(of_subvol, subvol, remainder=''):
             if of_subvol and subvol:
                 of_subvol.snaps.append(subvol)
                 of_subvol.snaps = sorted(of_subvol.snaps, key=lambda x: x.path)
@@ -1214,9 +1213,9 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
             dev_ns = self._dev_ns(subvol.dev)
             of_subvol = dev_ns.paths.get(of_path, None) if dev_ns else None
             if of_subvol:
-                link(of_subvol, subvol)
+                link(of_subvol, subvol, remainder)
             else:
-                link(self.snap_subvol, subvol)
+                link(self.snap_subvol, subvol, remainder)
 
         if self.db:
             print('DB: --->>> after gather_snapshots()')
@@ -1288,7 +1287,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         for line in lines[1:]:
             total, exclusive, _, pathname = re.split(r'\s+', line.strip(), maxsplit=3)
             pathname = os.path.join('/', pathname)
-            if not pathname in dev_ns.paths:
+            if pathname not in dev_ns.paths:
                 continue
             snap_ns = dev_ns.paths[pathname]
             snap_ns.size = convert_human(exclusive)

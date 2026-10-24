@@ -15,7 +15,6 @@ from types import SimpleNamespace
 
 import pytest
 from console_window import InlineConfirmation
-
 from my_snaps.main import BTRFS, DEFAULT_KEEP_SNAPS
 
 

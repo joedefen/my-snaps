@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import sys
 
-import pytest
-
 import my_snaps.main as main_module
+import pytest
 from my_snaps.main import BTRFS
 
 

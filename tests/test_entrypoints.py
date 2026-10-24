@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-import pytest
-
 import my_snaps.bt_smart_balance as bsb
 import my_snaps.main as main_mod
 import my_snaps.my_restore as restore_mod
 import my_snaps.MyUtils as my_utils
+import pytest
 
 
 class ReexecSpy:

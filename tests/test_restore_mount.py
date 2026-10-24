@@ -15,7 +15,6 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
-
 from my_snaps import my_restore
 
 SHOW_OUTPUT = """\
