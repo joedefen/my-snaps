@@ -18,7 +18,7 @@ Keep it, but keep it as a **personal, opinionated tool** for now. The design is 
 - 9 PyPI releases; latest published is 1.0.9 from 2025-10-17.
 - GitHub: 2 stars, 0 forks, 0 open issues, last push 2026-10-24.
 - No tests, no CI, no git tags, no changelog, no release artifacts on GitHub.
-- The working tree is **ahead of PyPI**: local [`pyproject.toml`](pyproject.toml#L7) still says 1.0.9 but pins [`console-window == 2.0.0.9`](pyproject.toml#L16), a version published 2026-10-24 13:23. The published 1.0.9 wheel requires `console-window >= 1.0.0`. So the checkout is an unreleased 1.0.9+ and the version must be bumped before another upload.
+- The working tree is **ahead of PyPI**: local [`pyproject.toml`](pyproject.toml#L7) still says 1.0.9 but pins [`console-window == 2.0.0.10`](pyproject.toml#L16), a version published 2026-10-24 13:23 (2.0.0.10 adds the inline-editor/caret support `main.py` now relies on). The published 1.0.9 wheel requires `console-window >= 1.0.0`. So the checkout is an unreleased 1.0.9+ and the version must be bumped before another upload.
 
 That last point matters for the audit: the bugs below are in the code you are running from source, which may differ from what PyPI users have.
 
@@ -63,12 +63,13 @@ That last point matters for the audit: the bugs below are in the code you are ru
 ### P1 — correctness, safety, and portability
 
 7. **`rsync -a -del` does not delete stale `/efi` entries.** [`sync_cmd()`](my_snaps/my_restore.py#L198) generates `rsync -a -del -H` at [`line 201`](my_snaps/my_restore.py#L201); the intended option is `--delete`. I verified that an extra stale file remains in the destination with `-del`, so the `.efi-back` mirroring is incomplete.
-8. **Python metadata disagrees with itself.** [`requires-python`](pyproject.toml#L14) says `>=3.8`; the README says Python 3.11+; the pinned `console-window` 2.0.0.9 requires `>=3.10`. On 3.8/3.9 the local install cannot resolve its dependency. Also prefer `console-window>=2.0.0.9,<3` over an exact pin: the dependency had 31 releases and five uploads within roughly 26 hours.
+8. **Python metadata disagrees with itself.** [`requires-python`](pyproject.toml#L14) says `>=3.8`; the README says Python 3.11+; the pinned `console-window` 2.0.0.10 requires `>=3.10`. On 3.8/3.9 the local install cannot resolve its dependency. Also prefer `console-window>=2.0.0.10,<3` over an exact pin: the dependency had 31 releases and five uploads within roughly 26 hours.
 9. **Root re-exec happens before argument parsing.** `my-snaps --help`, `my-restore -n`, and `bt-smart-balance --help` all invoke sudo before argparse. That is poor UX and makes `pip --user` installs fragile. Parse arguments first; only re-exec for actions that actually need root.
 10. **Non-interactive error paths crash instead of reporting.** [`_create_snap()`](my_snaps/main.py#L293) and [`_del_subvolume()`](my_snaps/main.py#L329) call `self.win.alert` on failure, but `self.win` is `None` in `-s`/cron mode. A real `btrfs` error is replaced by `AttributeError: 'NoneType' object has no attribute 'alert'`.
 11. **`process.wait()` before `communicate()` can deadlock.** If `btrfs sub list` or `df` produces more than the pipe buffer, the child blocks writing while the parent waits. With many snapshots this is plausible.
 12. **Shell construction with `shell=True` and unquoted paths.** [`_slurp_command()`](my_snaps/main.py#L355) runs as root through a shell. The README only forbids `.` and `/` in subvolume names, not spaces or shell metacharacters. Prefer argv lists and `subprocess.run([...])`; reserve shell only for fixed strings.
-13. **Mount discovery is not robust.** [`_mount_tmps()`](my_snaps/main.py#L415) mounts every BTRFS device writable under `/tmp/.btrfs` without forcing `subvolid=5`; a configured default subvolume can make the paths wrong. It also caches `blkid` and `/proc/mounts` for the process lifetime, so hot-plugged devices and later mounts are missed. Multi-device BTRFS filesystems appear as duplicate devices.
+13. **Mount discovery is not robust.** [`_mount_tmps()`](my_snaps/main.py#L415) mounts every BTRFS device writable under `/tmp/.btrfs` without forcing `subvolid=5`; a configured default subvolume can make the paths wrong. The device scan (`lsblk`) and `/proc/mounts` are cached for the process lifetime, so hot-plugged devices and later mounts are still missed until a refresh. Multi-device BTRFS filesystems appear as duplicate devices.
+    *The multi-second startup stall reported for step 2 is fixed:* the scan used `blkid`, which probes every block device; on the development machine the idle optical drive alone cost ~17 of the ~18 seconds. `lsblk -P` answers from sysfs/udev in ~8 ms, so startup went from ~18.5 s to ~0.08 s with no cache to invalidate.
 14. **Operational errors use `assert`.** [`assert self.snap_subvol`](my_snaps/main.py#L500) and the root-filesystem assertion vanish under `python -O`. Use explicit exceptions with actionable messages.
 15. **Auto-cleanup of `*ToDel` is too eager.** [`get_state()`](my_snaps/my_restore.py#L141) deletes any top-level name ending in `ToDel`, not just ones this tool created, and does it at startup. Require a flag or explicit menu action.
 16. **Menu arrow handling is duplicated.** In [`get_prompt_obj()`](my_snaps/InlineMenu.py#L290), `\033[C` appears in both the up/left and down/right branches at [`lines 302–305`](my_snaps/InlineMenu.py#L302), while `\033[D` is ignored. Right arrow always moves the wrong way, and left arrow does nothing.
@@ -133,7 +134,7 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 4. **Fix restore-after-revert:** rename the current subvolume to `.ToDel` instead of `btrfs sub del` on a mounted subvolume, or refuse with a clear message.
 5. **Make dry-run dry:** skip `*ToDel` deletion and forced mounts when `self.dry_run` is set.
 6. **Fix `rsync -a -del` → `rsync -a --delete`**.
-7. **Bump the version and align metadata:** `requires-python = ">=3.10"` (or 3.11 per README), `console-window>=2.0.0.9,<3`.
+7. **Bump the version and align metadata:** `requires-python = ">=3.10"` (or 3.11 per README), `console-window>=2.0.0.10,<3`.
 8. **Parse args before sudo**, and add `--version`.
 9. **Guard `self.win`** in non-interactive paths; print errors to stderr and exit nonzero.
 10. **Replace `assert` with explicit errors**, quote paths or use argv lists, and add `subvolid=5` to temporary mounts.

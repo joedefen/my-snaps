@@ -53,11 +53,19 @@ See the Quick Start. After install, run some tests per "Initial and Regression T
 * `r` replaces your eldest snapshot of the same label for each top-level subvolume that has any snapshots.
 * `a` replaces a snapshot of the same label for each top-level subvolume that has any snapshots.
   * to describe snapshots, add a short label when prompted (e.g., "=Update").
+* When the cursor is on a labeled snapshot (e.g., `--> deb@root.2026-10-23-073714=Daily`), `r` and `a` stay with that label: they ask `Replace a =Daily snap for 3 subvols?` or `Add a =Daily snap for 3 subvols?` and need only `y` or ESC.
+  * Only mounted top-level subvolumes are counted and changed, the same set the cron job maintains, so stale snapshots from an unmounted install (e.g., `/kub@home` with its 38-week-old `=Daily`) are left alone; highlighting such a stale snapshot refuses the action.
 * `d`: to remove highlighted subvolume (usually pick a snapshot); you cannot remove mounted subvolumes; if there are nested subvolumes, those are removed too.
 * `u`: to get disk usage (this can take quite a while and is not perfect)
 * `?`: to get help on all keys and navigation
 
 **NOTE**: actions often require confirmation to ensure accidental keystrokes do not clobber your system.
+
+**Startup speed.** The first screen needs the BTRFS devices, their mounts and their subvolume trees. Devices
+are described with `lsblk` (read from sysfs/udev, no media probing) instead of `blkid`, which probes every
+block device and used to stall for seconds on an idle optical drive. Mounting the devices read-only bookkeeping
+mounts under `/tmp/.btrfs` plus one `btrfs sub list` per device then costs a few milliseconds, so the state is
+always read fresh — there is no cache to go stale.
 
 **Non-interactive use**: `my-snaps` can be run non-interactively with these options:
 * `-p` or `--print` dumps your top-level subvolumes and their snapshots

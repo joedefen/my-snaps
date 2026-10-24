@@ -14,6 +14,7 @@ starting the window.
 # pylint: disable=too-many-instance-attributes,import-outside-toplevel
 # pylint: disable=global-statement,broad-exception-raised,too-many-branches
 # pylint: disable=too-many-statements,too-many-arguments
+# pylint: disable=too-many-return-statements
 
 import sys
 import os
@@ -23,7 +24,8 @@ import traceback
 import subprocess
 import curses as cs
 from types import SimpleNamespace
-from console_window import ConsoleWindow, ConsoleWindowOpts, OptionSpinner
+from console_window import (ConsoleWindow, ConsoleWindowOpts,
+                            InlineConfirmation, OptionSpinner)
 from my_snaps.MyUtils import human, ago_whence, timestamp_str
 
 ##############################################################################
@@ -46,11 +48,22 @@ class BTRFS:
         self.dirty = True # TBD: need to refresh knowledge
         self.show_size = False # until we calc disk usage
 
+        # Inline (non-modal) confirmation/input.  The prompt is rendered as an
+        # ordinary line under the picked row instead of an overlay dialog, so
+        # the rest of the listing stays visible while we ask.  The widget owns
+        # the buffer, the caret and the editing keys; this app only supplies
+        # the prompt wording, the row it belongs under and the callback.
+        self.confirm = InlineConfirmation()
+        self._confirm_prompt = ''
+        self._confirm_labels = ''
+        self._confirm_callback = None
+        self._confirm_prev_passthrough = False
+
         # Startup progress goes to stderr only when interactive (and before
         # curses owns the screen) so logs/cron output stay clean.
         self.show_progress = bool(getattr(sys.stderr, 'isatty', lambda: False)())
 
-        self.blkid_lines = [] # to avoid rerunning "blkid" on refresh
+        self.dev_records = [] # device scan, to avoid rescanning on refresh
         self.mounts_lines = [] # to avoid rereading "/proc/mounts" on refresh
 
         atexit.register(self.umount_tmps)
@@ -198,6 +211,13 @@ class BTRFS:
     def _start_window(self):
         def do_key(key):
             nonlocal spin, win, self
+            if self.confirm.active:
+                # While a confirmation is live every key belongs to it; the
+                # normal action keys must not fire underneath the prompt.
+                # prompt() can return None on resize/timeout: keep waiting.
+                if key is not None:
+                    self.handle_confirm_key(key)
+                return None
             value = spin.do_key(key, win)
             if key in (ord('u'), ) and not self.help_mode:
                 win.clear()
@@ -253,7 +273,9 @@ class BTRFS:
                 self.win.add_body(' s - create snapshot for highlighted item')
                 self.win.add_body(' u - compute "du" for all subvols (very slow)')
                 self.win.add_body(' r - replace eldest snapshot of each subvol')
-                self.win.add_body(' a - add snapshot o each subvol with snapshots')
+                self.win.add_body('     (on a labeled snapshot: that label only)')
+                self.win.add_body(' a - add snapshot to each subvol with snapshots')
+                self.win.add_body('     (on a labeled snapshot: that label only)')
                 self.win.add_body(' x - exit')
             else:
                 win.set_pick_mode(True)
@@ -267,6 +289,104 @@ class BTRFS:
                 print(traceback.format_exc())
                 sys.exit(15)
             win.clear()
+
+    ####################################################################
+    # Inline (non-modal) confirmation / input
+    #
+    # console_window's InlineConfirmation widget asks for confirmation
+    # without an overlay dialog: the prompt is drawn as an ordinary body
+    # line and the keys are routed to the widget.  Mode 'y' is a single
+    # keystroke; mode 'text' is a (seeded) line editor.
+    ####################################################################
+
+    def _begin_confirm(self, prompt, *, mode='yes', identity=None, seed='',
+                       labels=None, action_type=None, on_confirm=None):
+        """ Start an inline prompt; returns False when there is no window. """
+        if not self.win:
+            return False
+        self.confirm.start(action_type=action_type, identity=identity,
+                           mode=mode, initial=seed)
+        self._confirm_prompt = prompt
+        self._confirm_labels = labels or ''
+        self._confirm_callback = on_confirm
+        # Passthrough mode already forwards printable keys, the editing keys
+        # (Backspace, Delete, arrows, Home/End, Ctrl-A/E) and ESC, so no
+        # handled_keys juggling is needed to drive the widget.
+        self._confirm_prev_passthrough = self.win.passthrough_mode
+        self.win.passthrough_mode = True
+        return True
+
+    def _end_confirm(self):
+        """ Cancel the inline prompt and restore the window's key routing. """
+        self.confirm.cancel()
+        self._confirm_prompt = ''
+        self._confirm_labels = ''
+        self._confirm_callback = None
+        if self.win:
+            self.win.passthrough_mode = self._confirm_prev_passthrough
+
+    def handle_confirm_key(self, key):
+        """ Route one key to the active inline prompt.
+
+        Returns True when the key was consumed, False when no prompt is
+        active.  A confirmed answer is delivered to the callback captured by
+        _begin_confirm() AFTER the prompt has been torn down, so the callback
+        is free to start another prompt (e.g., to re-ask after bad input).
+        """
+        if not self.confirm.active:
+            return False
+        if key is None:  # resize/timeout wakes the prompt without a keystroke
+            return True
+        result = self.confirm.handle_key(key)
+        if result == 'confirmed':
+            answer = self.confirm.input_buffer
+            callback = self._confirm_callback
+            self._end_confirm()
+            if callback:
+                callback(answer)
+        elif result == 'cancelled':
+            self._end_confirm()
+        return True
+
+    def _confirm_line(self):
+        """ The body line that displays the live inline prompt.
+
+        Kept terse on purpose: the warning glyph marks the line, and a short
+        bracketed hint reminds of the two keys that matter.  In text mode the
+        keys are named up-front (before the text being edited) and the widget
+        composes the buffer with its caret glyph at the editing position.
+        """
+        mode = self.confirm.mode
+        if mode == 'text':
+            return ('  ⚠️ '
+                    + self.confirm.get_display_string(
+                        f'{self._confirm_prompt}: '))
+        if mode in ('Y', 'y'):
+            hint = f'Press "{mode}" or ESC'
+        else:
+            hint = self.confirm.get_hint()
+        return f'  ⚠️ {self._confirm_prompt}   [{hint}]'
+
+    def _confirm_lines(self):
+        """ All body lines for the live prompt, as (text, attr) pairs.
+
+        The label list of the "_all" operations lives on its own dim line so
+        the prompt itself stays short.
+        """
+        lines = [(self._confirm_line(), cs.A_BOLD)]
+        if self._confirm_labels:
+            lines.append((f'     labels: {self._confirm_labels}', cs.A_DIM))
+        return lines
+
+    def _flash_error(self, message, seconds=4.0):
+        """ Report a refusal in a flash (auto-dismissing) box, not an alert.
+
+        Denials only need a few words read, so there is no point in making the
+        user press a key to get rid of a full alert dialog.
+        """
+        if self.win:
+            self.win.flash(message, duration=seconds)
+        return False
 
     def _replace_eldest_snaps_of_subvol(self, subvol_ns, like_snaps,
                                         suffix=None, discard=1):
@@ -284,40 +404,121 @@ class BTRFS:
         return self._create_snap(subvol_ns, suffix=suffix)
 
 
-    def _replace_eldest_snaps(self, discard=1, just_add=False):
-        """ TBD """
-        suffix, success = None, None
+    def _picked_subvol_ns(self):
+        """ The subvolume of the row under the cursor (None when there is none). """
+        pick_pos = getattr(self.win, 'pick_pos', None)
+        if not isinstance(pick_pos, int) or not 0 <= pick_pos < len(self.rows):
+            return None
+        return self.rows[int(pick_pos)].subvol_ns
 
-        if self.add_limit > 0:
-            suffix = self._cur_snap_suffix()
-        else:
-            while True:
-                suffix = self.win.answer(
-                    f'Set snap suffix OR clear; labels: {",".join(list(self.label_set))}',
-                        seed=suffix if suffix else self._cur_snap_suffix())
-                if suffix is None:  # user aborted (ESC) the dialog
-                    return success
-                if suffix and (len(suffix) < 5 or suffix[:1] != '.'
-                            or any(x in suffix[1:] for x in './')):
-                    self.win.alert(
-                        'answer must be "." PLUS 4 or more characters w/o any "." or "/"')
-                else:
-                    self.label = self._get_label(suffix)
-                    break
+    def _picked_snap_label(self):
+        """ The label of the snapshot under the cursor ('' when it is not one).
+
+        Sitting on e.g. "...--> deb@root.2026-10-23-073714=Daily" means the
+        intent is about the =Daily family of snapshots rather than the whole
+        listing, so r/a only need a yes/no instead of the suffix prompt.
+        """
+        subvol_ns = self._picked_subvol_ns()
+        if subvol_ns is None or not subvol_ns.snap_of:
+            return ''
+        return subvol_ns.snap_label or ''
+
+    def _labeled_targets(self, label):
+        """ The contemporary subvolumes that own a snapshot with `label`.
+
+        `snap_targets` is already the mounted, top-level set the cron job
+        maintains, so stale subvolumes (e.g., an old install's /kub@home) are
+        not resurrected just because they still hold a =Daily snapshot.
+        """
+        return [subvol_ns for subvol_ns in self.snap_targets
+                if subvol_ns.label_groups.get(label)]
+
+    def _replace_eldest_snaps(self, just_add=False):
+        """ Ask (inline) for the snap suffix, then retain/add per subvolume.
+
+        When the cursor sits on a labeled snapshot, r/a act on that label only
+        and need just a yes/no: there is nothing to type.
+        """
+        if self.add_limit > 0:  # cron / -s: fully non-interactive
+            return self._do_replace_eldest_snaps(
+                self._cur_snap_suffix(), just_add=just_add)
+
+        label = self._picked_snap_label()
+        if label:
+            return self._confirm_labeled_snaps(label, just_add)
+
+        self._begin_confirm(
+            'Set snap suffix, then ENTER or ESC',
+            mode='text', seed=self._cur_snap_suffix(),
+            labels=' '.join(sorted(self.label_set)),
+            action_type='replace',
+            on_confirm=lambda suffix: self._suffix_entered(suffix, just_add))
+        return None
+
+    def _confirm_labeled_snaps(self, label, just_add):
+        """ Inline y/ESC confirmation for the labeled snaps under the cursor.
+
+        Only mounted top-level subvolumes are candidates.  A snapshot whose
+        owning subvolume is not one of them (unmounted, e.g. /kub@home) is
+        refused rather than silently acting on the other subvolumes.
+        """
+        verb = 'Add' if just_add else 'Replace'
+        picked = self._picked_subvol_ns()
+        owner = picked.snap_of if picked else None
+        if owner is None or owner not in self.snap_targets:
+            where = owner.path if owner else 'this subvolume'
+            return self._flash_error(
+                f'Cannot {verb.lower()} snaps of {where} '
+                '(not a mounted top-level subvolume)')
+        targets = self._labeled_targets(label)
+        if not targets:
+            return self._flash_error(f'No subvolumes have {label} snapshots')
+        plural = 's' if len(targets) != 1 else ''
+        self._begin_confirm(
+            f'{verb} a {label} snap for {len(targets)} subvol{plural}?',
+            mode='y', identity=picked.path if picked else None,
+            action_type='add' if just_add else 'replace',
+            on_confirm=lambda answer: self._labeled_snaps_confirmed(
+                label, just_add, targets, answer))
+        return None
+
+    def _labeled_snaps_confirmed(self, label, just_add, targets, answer):
+        """ Run the labeled replace/add only for a 'y' answer. """
+        if not answer.strip().lower().startswith('y'):
+            return
+        self.label = label
+        self._do_replace_eldest_snaps(
+            self._cur_snap_suffix(), just_add=just_add, targets=targets)
+
+    def _suffix_entered(self, suffix, just_add):
+        """ Validate an inline suffix; bad input re-prompts inline. """
+        if suffix and (len(suffix) < 5 or suffix[:1] != '.'
+                    or any(x in suffix[1:] for x in './')):
+            self._begin_confirm(
+                'Suffix must be "." + 4 chars, no "." or "/"',
+                mode='text', seed=suffix, action_type='replace',
+                on_confirm=lambda value: self._suffix_entered(value, just_add))
+            return
         if not suffix:
-            return success
+            return
+        self.label = self._get_label(suffix)
+        self._do_replace_eldest_snaps(suffix, just_add=just_add)
 
-        counts = []
-        for subvol_ns in self.snap_targets:
-            counts.append(len(subvol_ns.label_groups.get(self.label, [])))
+    def _do_replace_eldest_snaps(self, suffix, just_add=False, targets=None):
+        """ The actual replace/add work, given an already accepted suffix. """
+        if targets is None:
+            targets = self.snap_targets
+        success = None
+        counts = [len(subvol_ns.label_groups.get(self.label, []))
+                  for subvol_ns in targets]
+        max_cnt = self.add_limit if self.add_limit else max(counts, default=0)
 
-        for subvol_ns in self.snap_targets:
+        for subvol_ns in targets:
             like_snaps = subvol_ns.label_groups.get(self.label, [])
             this_cnt = len(like_snaps)
             if just_add:
                 discard = max(0, this_cnt-8+1)
             else:
-                max_cnt = self.add_limit if self.add_limit else max(counts)
                 discard = max(0, this_cnt-max_cnt+1)
 
             rv = self._replace_eldest_snaps_of_subvol(subvol_ns,
@@ -333,23 +534,23 @@ class BTRFS:
         dev_ns = self.devs[subvol_ns.dev]
 
         if subvol_ns.snap_of:
-            self.win.alert('Sorry, cannot create snapshot of snapshot')
-            return False
+            return self._flash_error('Cannot snap a snapshot')
 
         if not subvol_ns.mount:
-            self.win.alert('Sorry, cannot create snapshot of unmounted subvolume')
-            return False
+            return self._flash_error('Cannot snap an unmounted subvolume')
 
         if subvol_ns.mount == '/.snapshots':
-            self.win.alert('Sorry, cannot create snapshot of snapshot subvolume')
-            return False
+            return self._flash_error('Cannot snap the snapshot subvolume')
 
         if not suffix:
-            seed=self._cur_snap_suffix()
-            suffix = self.win.answer(
-                f'Set suffix for snap "{subvol_ns.path}" OR clear', seed=seed)
-            if suffix is None:  # user aborted (ESC) the dialog
-                return False
+            # Inline text prompt: the row itself names the subvolume, so the
+            # prompt only asks for the suffix; ESC cancels.
+            self._begin_confirm(
+                'Set snap suffix, then ENTER or ESC',
+                mode='text', identity=subvol_ns.path,
+                seed=self._cur_snap_suffix(), action_type='snap',
+                on_confirm=lambda value: self._create_snap(subvol_ns, value))
+            return None
         if not suffix:
             return False
 
@@ -370,13 +571,17 @@ class BTRFS:
 
         for ns in self.subvol_iter(subvol_ns, top_down=False):
             if ns.mount:
-                self.win.alert(f'Sorry, cannot delete mounted subvol {ns.mount}')
-                return False
+                return self._flash_error(f'Cannot delete mounted {ns.mount}')
 
         if not ans:
-            ans = self.win.answer(f'Type "y" to Delete "{subvol_ns.path}"')
-            if ans is None:  # user aborted (ESC) the dialog
+            # Inline single-key confirmation: 'y' proceeds, ESC cancels.
+            if not self._begin_confirm(
+                    f'Delete "{subvol_ns.path}"', mode='y',
+                    identity=subvol_ns.path, action_type='delete',
+                    on_confirm=lambda _value: self._del_subvolume(
+                        subvol_ns, ans='y')):
                 return False
+            return None
         if not ans.strip().lower().startswith('y'):
             return False
 
@@ -412,33 +617,61 @@ class BTRFS:
         """ Return the full path to a dev (aka device basename) """
         return f'/dev/{dev}'
 
+    LSBLK_FIELDS = 'NAME,PATH,TYPE,FSTYPE,LABEL,UUID'
+
+    @staticmethod
+    def parse_lsblk_line(line):
+        """ Parse one `lsblk -P` line into a {FIELD: value} dict. """
+        return dict(re.findall(r'([A-Z_]+)="([^"]*)"', line))
+
+    @staticmethod
+    def parse_blkid_line(line):
+        """ Parse one `blkid` line into the `lsblk -P` field spelling. """
+        rec = {field.upper(): value
+               for field, value in re.findall(r'(\w+)="([^"]*)"', line)}
+        if 'TYPE' in rec:  # blkid spells the filesystem type "TYPE"
+            rec['FSTYPE'] = rec.pop('TYPE')
+        rec['PATH'] = line.split(':', maxsplit=1)[0]
+        rec['NAME'] = os.path.basename(rec['PATH'])
+        return rec
+
+    def _scan_block_devices(self):
+        """ Describe the block devices *without probing* their media.
+
+        `blkid` with no arguments opens every block device and runs the whole
+        signature detection chain.  A single idle optical drive (or a
+        spun-down disk) can block that for 15+ seconds, and all this tool
+        needs from it is the set of BTRFS devices.  `lsblk -P` answers from
+        sysfs plus the udev database in a few milliseconds, so it is the
+        primary source; `blkid` stays as a fallback for the (unlikely) case
+        of a system without lsblk.
+        """
+        if self.dev_records:
+            return self.dev_records
+        out, _, code = self._slurp_command(f'lsblk -P -o {self.LSBLK_FIELDS}')
+        if code == 0 and out:
+            self.dev_records = [self.parse_lsblk_line(line) for line in out]
+        else:
+            out, _, _ = self._slurp_command('blkid')
+            self.dev_records = [self.parse_blkid_line(line) for line in out]
+        return self.dev_records
+
     def _load_devs(self):
-        """ Discover all the BTRS Devices """
-
-        if not self.blkid_lines:
-            self.blkid_lines, _, _ = self._slurp_command('blkid')
+        """ Discover all the BTRFS Devices (no probing, see _scan_block_devices) """
         self.devs = {}
-        for line in self.blkid_lines:
-            # /dev/nvme0n1p2: LABEL="btrfs-common"
-            #   UUID="8f60fc2f-872d-4327-aff9-34c4c4cefde7"
-            #   UUID_SUB="d7b0987a-1133-4844-a19b-c6c22350379a"
-            #   BLOCK_SIZE="4096" TYPE="btrfs"
-            #   PARTUUID="02b5122d-5229-c347-a351-142008b89149"
-
-            matches = re.findall(r'(\w+)="([^"]+)"', line)
-            ns = SimpleNamespace() # Create a dictionary to store the fields and values
-            for match in matches:
-                field, value = match[0].lower(), match[1]
-                if field in ('type',):
-                    setattr(ns, field, value)
-            if not hasattr(ns, 'type'):
+        for rec in self._scan_block_devices():
+            if rec.get('FSTYPE') != 'btrfs' or rec.get('TYPE') == 'rom':
                 continue
-            ns.dev = os.path.basename(line.split(': ', maxsplit=1)[0])
-            if ns.type in ('btrfs', ) and ns.dev:
-                delattr(ns, 'type')
-                rows, _, _ = self._slurp_command(f'df -h {self.dev_path(ns.dev)}')
-                ns.diskfree = rows[1] if len(rows) >= 2 else ''
-                self.devs[ns.dev] = ns
+            dev = rec.get('NAME') or os.path.basename(rec.get('PATH', ''))
+            if not dev:
+                continue
+            dev_ns = SimpleNamespace(
+                    dev=dev,
+                    device_path=rec.get('PATH') or self.dev_path(dev),
+                    label=rec.get('LABEL', ''), uuid=rec.get('UUID', ''))
+            rows, _, _ = self._slurp_command(f'df -h {dev_ns.device_path}')
+            dev_ns.diskfree = rows[1] if len(rows) >= 2 else ''
+            self.devs[dev] = dev_ns
         if self.DB:
             print('DB: --->>> after load_devs()')
             for dev, ns in self.devs.items():
@@ -452,6 +685,58 @@ class BTRFS:
                     children=[], snap_label='', snap_of=None,
                     ident=ident, parent=parent, ago_str='')
 
+    @staticmethod
+    def parse_subvol_list(lines):
+        """ Parse `btrfs sub list` output into (ident, parent, path) triples. """
+        rv = []
+        for line in lines:
+            wds = line.split(maxsplit=8)
+            if len(wds) < 9:
+                continue
+            rv.append((wds[1], wds[6], f'/{wds[8]}'))
+        return rv
+
+    def _init_dev_subvols(self, dev_ns, triples):
+        """ (Re)build the subvolume tree of one device from the triples. """
+        dev_ns.tmp_path = os.path.join(self.tmp_dir, dev_ns.dev)
+        dev_ns.paths = {} # subvols keyed by relative path
+        dev_ns.idents = {} # subvols keyed by ident
+        dev_ns.subvols = []
+        for ident, parent, path in triples:
+            child = BTRFS.init_subvol_ns(dev=dev_ns.dev,
+                         path=path, ident=ident, parent=parent)
+            if parent in dev_ns.idents:
+                parent_ns = dev_ns.idents[parent]
+                child.depth = parent_ns.depth+1
+                parent_ns.children.append(child)
+            else: # top-levels are in the dev
+                dev_ns.subvols.append(child)
+            dev_ns.idents[ident] = child
+            dev_ns.paths[path] = child
+            child.ago_str = ago_whence(child.path)
+
+    def _ensure_tmp_mount(self, dev):
+        """ Mount `dev` under the tmp dir unless it is already mounted there.
+
+        Returns the mount dir, or None when the mount fails.
+        """
+        dev_ns = self.devs.get(dev)
+        if dev_ns is None:
+            return None
+        tmp_mount_dir = os.path.join(self.tmp_dir, dev)
+        if os.path.ismount(tmp_mount_dir):
+            dev_ns.tmp_path = tmp_mount_dir
+            return tmp_mount_dir
+        os.makedirs(tmp_mount_dir, exist_ok=True)
+        dev_node = getattr(dev_ns, 'device_path', None) or self.dev_path(dev)
+        code = os.WEXITSTATUS(os.system(
+                f'set -x; mount {dev_node} {tmp_mount_dir}'))
+        if code:
+            return None
+        dev_ns.tmp_path = tmp_mount_dir
+        return tmp_mount_dir
+
+
     def _mount_tmps(self):
         """ mount each btrfs as needed """
         os.makedirs(self.tmp_dir, exist_ok=True)
@@ -460,35 +745,11 @@ class BTRFS:
             self._progress(
                 'Reading BTRFS state. Be patient ... [3/5] '
                 f'mounting {dev} ({dev_ndx}/{dev_count})')
-            tmp_mount_dir = os.path.join(self.tmp_dir, dev)
-            if not os.path.ismount(tmp_mount_dir):
-                os.makedirs(tmp_mount_dir, exist_ok=True)
-                code = os.WEXITSTATUS(os.system(
-                        f'set -x; mount {self.dev_path(dev_ns.dev)} {tmp_mount_dir}'))
-                if code:
-                    raise Exception(f'cannot mount {dev_ns.dev} {code=}')
-            dev_ns.tmp_path = tmp_mount_dir
+            tmp_mount_dir = self._ensure_tmp_mount(dev)
+            if tmp_mount_dir is None:
+                raise Exception(f'cannot mount {dev_ns.dev}')
             lines, _, _ = self._slurp_command(f'btrfs sub list {tmp_mount_dir}')
-
-            dev_ns.paths = {} # subvols keyed by relative path
-            dev_ns.idents = {} # subvols keyed by ident
-            dev_ns.subvols = []
-            for line in lines:
-                wds = line.split(maxsplit=8)
-                if len(wds) < 9:
-                    continue
-                ident, parent, path = wds[1], wds[6], f'/{wds[8]}'
-                child = BTRFS.init_subvol_ns(dev=dev,
-                             path=path, ident=ident, parent=parent)
-                if parent in dev_ns.idents:
-                    parent_ns = dev_ns.idents[parent]
-                    child.depth = parent_ns.depth+1
-                    parent_ns.children.append(child)
-                else: # top-levels are in the dev
-                    dev_ns.subvols.append(child)
-                dev_ns.idents[ident] = child
-                dev_ns.paths[path] = child
-                child.ago_str = ago_whence(child.path)
+            self._init_dev_subvols(dev_ns, self.parse_subvol_list(lines))
 
         if self.DB:
             print('DB: --->>> after mount_tmps()')
@@ -501,26 +762,49 @@ class BTRFS:
     def umount_tmps(self):
         """ unmount each btrfs as needed """
         for ns in self.devs.values():
-            os.system(f'set -x; umount {ns.tmp_path}')
+            tmp_path = getattr(ns, 'tmp_path', None)
+            if tmp_path and os.path.ismount(tmp_path):
+                os.system(f'set -x; umount {tmp_path}')
 
-    def _determine_mount_points(self):
+    def _load_mounts(self):
+        """ Read "/proc/mounts" once per process. """
         if not self.mounts_lines:
             self.mounts_lines = self._slurp_file('/proc/mounts')
-        for line in self.mounts_lines:
-            wds = re.split(r'\s+', line)
-            if len(wds) < 4:
-                continue
+        return self.mounts_lines
 
-            mount, fstype, opts = wds[1], wds[2], wds[3]
+    @staticmethod
+    def parse_mount_line(line):
+        """ Parse a "/proc/mounts" line into
+        (dev, mount, fstype, subvolid, subvol); the last two are None unless
+        the entry is a BTRFS mount.
+        """
+        wds = re.split(r'\s+', line)
+        if len(wds) < 4:
+            return None
+        dev, mount, fstype, opts = wds[0], wds[1], wds[2], wds[3]
+        subvolid = subvol = None
+        if fstype == 'btrfs':
+            mat = re.search(r'subvolid=(\d+)', opts)
+            subvolid = mat.group(1) if mat else None
+            mat = re.search(r'subvol=(\S+)', opts)
+            subvol = mat.group(1) if mat else None
+        return dev, mount, fstype, subvolid, subvol
+
+    def _all_mounts(self):
+        """ Every "/proc/mounts" entry, as parse_mount_line() tuples. """
+        rv = []
+        for line in self._load_mounts():
+            parsed = self.parse_mount_line(line)
+            if parsed:
+                rv.append(parsed)
+        return rv
+
+    def _determine_mount_points(self):
+        for _dev, mount, fstype, ident, _subvol in self._all_mounts():
             if mount == '/' and fstype != 'btrfs':
                 assert False, f'root is not BTRFS ({mount}, {fstype})'
-            if fstype != 'btrfs':
+            if fstype != 'btrfs' or ident is None:
                 continue
-
-            match = re.search(r'subvolid=(\d+)', opts)
-            if not match:
-                continue
-            ident = match.group(1)
             for subvol in self.subvol_iter():
                 if subvol.ident == ident:
                     subvol.mount = mount
@@ -542,7 +826,6 @@ class BTRFS:
                 if subvol.mount:
                     print(f'DB:   {subvol.dev=} {subvol.mount=} {subvol.path=}')
         assert self.snap_subvol, "cannot find mounted /.snapshots"
-
 
     @staticmethod
     def _get_label(string):
@@ -685,12 +968,11 @@ class BTRFS:
         mounts_width = self.calc_mounts_width()
         devs_width = self.calc_devs_width()
 
-        win.add_header('MY-SNAPS', attr=cs.A_REVERSE)
-        win.add_header(
-            '  s:+snap d:-subvol u:disk-usage r:replace-all a:add-all x:exit ?:help',
-            resume=True)
+        win.add_fancy_header('MY-SNAPS'
+            '  [s]:+snap [d]:-subvol [u]:disk-usage [r]eplace-all [a]dd-all [x]:exit [?]:help',
+            mode='Underline')
         for dev_ns in self.devs.values():
-            win.add_header(f'df: {dev_ns.diskfree}')
+            win.add_header(f'df: {dev_ns.diskfree}', attr=cs.A_DIM)
         size_hdr = f' {"~Size":>7}'
         win.add_header(
               f'{"Mount":>{mounts_width}}'
@@ -705,6 +987,17 @@ class BTRFS:
             for line in body:
                 win.add_body(line, attr=cs.A_REVERSE)
             return
+
+        # An active inline prompt is drawn as a normal body line, so the
+        # listing stays visible instead of being covered by a dialog.
+        confirming = self.confirm.active
+
+        def add_prompt():
+            for text, attr in self._confirm_lines():
+                win.add_body(text, attr=attr)
+
+        if confirming and not self.confirm.identity:
+            add_prompt()
 
         for row in self.rows:
             wds = row.path.split('@snapshots/', maxsplit=1)
@@ -723,6 +1016,8 @@ class BTRFS:
                   f'{size_str if self.show_size else ""}'
                   f' {row.dev:>{devs_width}}'
                   f' {shown_path:<{path_width}}')
+            if confirming and row.path == self.confirm.identity:
+                add_prompt()
 
 btrfs = None
 
