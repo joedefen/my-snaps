@@ -6,12 +6,14 @@ actually change the system.
 """
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
-import my_snaps.MyUtils as my_utils
 import my_snaps.bt_smart_balance as bsb
 import my_snaps.main as main_mod
 import my_snaps.my_restore as restore_mod
+import my_snaps.MyUtils as my_utils
 
 
 class ReexecSpy:
@@ -158,7 +160,7 @@ def test_bt_smart_balance_install_reexecs(monkeypatch):
 class FakeRestore:
     """Stand-in for BtrfsRestore that records how it was built."""
 
-    instances = []
+    instances: ClassVar[list] = []
 
     def __init__(self, dry_run=False):
         self.dry_run = dry_run

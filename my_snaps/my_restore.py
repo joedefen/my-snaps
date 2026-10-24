@@ -424,7 +424,7 @@ def parse_args(argv=None):
     only prints the commands it would execute.
     """
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(prog='my-restore')
     parser.add_argument('--version', action='version',
             version=f'%(prog)s {version_string()}')
     parser.add_argument('-n', '--dry-run', action="store_true",

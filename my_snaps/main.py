@@ -1030,7 +1030,7 @@ def parse_args(argv=None):
     a command that does no work.
     """
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(prog='my-snaps')
     parser.add_argument('--version', action='version',
             version=f'%(prog)s {version_string()}')
     parser.add_argument('-s', '--add-snap-max', type=int, default=None,

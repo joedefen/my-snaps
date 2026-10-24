@@ -164,7 +164,7 @@ class BtSmartBalance:
 def parse_args(argv=None):
     """ Parse the command line before anything asks for root. """
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(prog='bt-smart-balance')
     parser.add_argument('--version', action='version',
             version=f'%(prog)s {version_string()}')
     parser.add_argument('-a', '--allocated-pct-min', type=int, default=70,
