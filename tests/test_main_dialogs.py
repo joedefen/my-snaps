@@ -758,7 +758,7 @@ def test_unlabeled_s_targets_the_empty_label(monkeypatch):
     monkeypatch.setattr(BTRFS, 'umount_tmps', lambda self: None)
     monkeypatch.setattr(BTRFS, '_replace_eldest_snaps',
                         lambda self: seen.append(self.label) or True)
-    opts = SimpleNamespace(DB=False, cron=None, add_snap_max=2,
+    opts = SimpleNamespace(db=False, cron=None, add_snap_max=2,
                            keep=DEFAULT_KEEP_SNAPS, label=None, print=False)
 
     with pytest.raises(SystemExit) as exc:

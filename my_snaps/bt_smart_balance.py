@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ Tool to start btrfs filesystem balance if needed """
-# pylint: disable=invalid-name,too-many-instance-attributes
+
+import argparse
 import os
 import re
 import shlex
@@ -163,7 +164,6 @@ class BtSmartBalance:
 
 def parse_args(argv=None):
     """ Parse the command line before anything asks for root. """
-    import argparse
     parser = argparse.ArgumentParser(prog='bt-smart-balance')
     parser.add_argument('--version', action='version',
             version=f'%(prog)s {version_string()}')
@@ -191,6 +191,7 @@ def parse_args(argv=None):
     return opts
 
 def run(argv=None):
+    """ Run one balance check, or install the periodic job when asked. """
     opts = parse_args(argv)
     # `_run()` prepends sudo to each btrfs command, so a normal check or
     # balance needs no whole-process re-exec.  Only installing the job writes

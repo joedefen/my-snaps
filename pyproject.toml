@@ -32,6 +32,7 @@ classifiers = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pylint>=3.3",
 ]
 
 [project.urls]
@@ -47,3 +48,14 @@ bt-smart-balance = "my_snaps.bt_smart_balance:run"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
+
+[tool.pylint.main]
+# Lint against the oldest supported interpreter so the checks stay valid for
+# every version in `requires-python`.
+py-version = "3.11"
+
+[tool.pylint.basic]
+# `MyUtils` and `InlineMenu` predate the package's snake_case renaming and are
+# imported by tests and downstream callers, so exempt only those two module
+# names instead of disabling `invalid-name` file by file.
+module-rgx = "^([a-z_][a-z0-9_]*|MyUtils|InlineMenu)$"

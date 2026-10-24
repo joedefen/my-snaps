@@ -18,7 +18,7 @@ from my_snaps.main import BTRFS
 def btrfs():
     """A BTRFS instance with only the state _slurp_command() needs."""
     obj = object.__new__(BTRFS)
-    obj.DB = False
+    obj.db = False
     return obj
 
 

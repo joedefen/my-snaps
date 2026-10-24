@@ -4,18 +4,16 @@
 BTRFS snapshot tool implementing the simplest snapshot strategy; i.e.,
   * replace eldest snapshots with new ones before updates, and
   * generally keep those snapshots until the next update.
-  
+
 NOTE: for basic debugging, pass --DB and it will dump major objects w/o
 starting the window.
 """
-# pylint: disable=invalid-name,consider-using-with,too-few-public-methods
-# pylint: disable=redefined-outer-name,consider-using-generator
-# pylint: disable=too-many-locals,broad-exception-caught,multiple-statements
-# pylint: disable=too-many-instance-attributes,import-outside-toplevel
-# pylint: disable=global-statement,broad-exception-raised,too-many-branches
-# pylint: disable=too-many-statements,too-many-arguments
-# pylint: disable=too-many-return-statements
+# This module is the TUI plus its device/mount bookkeeping.  It is long because
+# those concerns share one live state machine; keep new behaviour in small
+# helpers instead of growing `_start_window()` or `refresh_info()`.
+# pylint: disable=too-many-lines
 
+import argparse
 import sys
 import os
 import re
@@ -53,7 +51,7 @@ class BTRFSError(RuntimeError):
     """
 
 
-class BTRFS:
+class BTRFS:  # pylint: disable=too-many-instance-attributes
     """ Drive the my-snaps TUI and the non-interactive snapshot actions.
 
     One instance owns the discovered devices and subvolumes (`self.devs`),
@@ -61,6 +59,15 @@ class BTRFS:
     curses window. `main()` creates it after the root re-exec; constructing
     it only records options.
     """
+
+    # The live instance, used by `run()` to restore the terminal from an
+    # exception handler.  A class attribute keeps the reference explicit
+    # instead of a module-wide `global` that is easy to miss.
+    current = None
+
+    # Device, mount, row and inline-prompt state deliberately live on one
+    # object: every action needs most of it, so splitting the class would
+    # only push a dozen collaborators through each call.
 
     # How long the TUI waits for a keystroke before it checks for a
     # hot-plugged device or a new mount (see _poll_device_changes).
@@ -78,7 +85,7 @@ class BTRFS:
         self.snap_targets = [] # the potential subvols to snapshot
         self.label_set = set() # all labels of current snapshots
         self.snap_subvol = None
-        self.DB = opts.DB
+        self.db = opts.db
         self.add_limit = opts.add_snap_max
         self.keep = opts.keep  # cap for `a` when no `-s` limit applies
         self.label = None   # one label of current interest
@@ -118,7 +125,7 @@ class BTRFS:
 
         self._refresh_if_dirty()
 
-        if self.DB:
+        if self.db:
             self._get_disk_usage()
             sys.exit(0)
 
@@ -207,16 +214,20 @@ class BTRFS:
         for ns in self.subvol_iter():
             sizes[f'{ns.dev}{ns.path}'] = ns.size
 
-        step += 1; phase('identifying BTRFS devices')
+        step += 1
+        phase('identifying BTRFS devices')
         self._load_devs()  # learn all the BTRFS partitions
 
-        step += 1; phase('mounting BTRFS devices')
+        step += 1
+        phase('mounting BTRFS devices')
         self._mount_tmps()  # mount BTRFS partitions in /tmp/.btrfs
 
-        step += 1; phase('matching mount points')
+        step += 1
+        phase('matching mount points')
         self._determine_mount_points() # associated current mounts with subvols
 
-        step += 1; phase('gathering snapshots')
+        step += 1
+        phase('gathering snapshots')
         self.gather_snapshots()  # determine subvols that are snapshots
         # restore sizes after refresh
         for ns in self.subvol_iter():
@@ -245,10 +256,9 @@ class BTRFS:
             return
 
         for dev_ns in self.devs.values():
-            # pylint: disable=redefined-argument-from-local
-            for subvol_ns in dev_ns.subvols:
-                if subvol_ns.depth == 0:
-                    yield from children_iter(subvol_ns, top_down=top_down)
+            for top_ns in dev_ns.subvols:
+                if top_ns.depth == 0:
+                    yield from children_iter(top_ns, top_down=top_down)
 
     def _cur_snap_suffix(self):
         return '.' + timestamp_str() + ('' if self.label is None else self.label)
@@ -258,56 +268,57 @@ class BTRFS:
         if self.win:
             self.win.stop_curses()
 
+    def _handle_key(self, key, spin, win):
+        """ Route one keypress and return the spinner's current value.
+
+        `key` is None when the prompt woke on its idle timeout (or a resize):
+        poll for hot-plugged devices instead of acting.  While an inline
+        confirmation is live every key belongs to it, so the action keys must
+        not fire underneath the prompt.
+        """
+        if self.confirm.active:
+            if key is not None:
+                self.handle_confirm_key(key)
+            return None
+        if key is None:
+            self._poll_device_changes()
+            return None
+        value = spin.do_key(key, win)
+        if key in (ord('u'), ) and not self.help_mode:
+            self._confirm_disk_usage()
+
+        elif key in (ord('f'), ) and not self.help_mode:
+            # "freshen": rebuild devices, mounts and subvolume trees on the
+            # next loop iteration (refresh_info() runs right after the key).
+            self.dirty = True
+
+        elif key in (ord('r'), ) and not self.help_mode:
+            self._replace_eldest_snaps()
+
+        elif key in (ord('a'), ) and not self.help_mode:
+            self._replace_eldest_snaps(just_add=True)
+
+        elif key in (ord('s'), ) and not self.help_mode:
+            self._create_snap()
+
+        elif key in (ord('d'), ) and not self.help_mode:
+            self._del_subvolume()
+
+        elif key in (ord('x'), ) and not self.help_mode:
+            self.stop_curses()
+            print('\n   OK, QUITTING NOW\n')
+            sys.exit(0)
+
+        elif key in (cs.KEY_ENTER, 10) and self.help_mode:
+            self.help_mode = False
+            win.set_pick_mode(False)
+
+        elif key == ord('n'):
+            win.alert(title='Info', message=f'got: {value}')
+
+        return value
+
     def _start_window(self):
-        def do_key(key):
-            nonlocal spin, win, self
-            if self.confirm.active:
-                # While a confirmation is live every key belongs to it; the
-                # normal action keys must not fire underneath the prompt.
-                # prompt() can return None on resize/timeout: keep waiting.
-                if key is not None:
-                    self.handle_confirm_key(key)
-                return None
-            if key is None:
-                # prompt() woke on its idle timeout (or a resize) without a
-                # keystroke: look for hot-plugged devices or new mounts.
-                self._poll_device_changes()
-                return None
-            value = spin.do_key(key, win)
-            if key in (ord('u'), ) and not self.help_mode:
-                self._confirm_disk_usage()
-
-            elif key in (ord('f'), ) and not self.help_mode:
-                # "freshen": rebuild devices, mounts and subvolume trees on the
-                # next loop iteration (refresh_info() runs right after do_key).
-                self.dirty = True
-
-            elif key in (ord('r'), ) and not self.help_mode:
-                self._replace_eldest_snaps()
-
-            elif key in (ord('a'), ) and not self.help_mode:
-                self._replace_eldest_snaps(just_add=True)
-
-            elif key in (ord('s'), ) and not self.help_mode:
-                self._create_snap()
-
-            elif key in (ord('d'), ) and not self.help_mode:
-                self._del_subvolume()
-
-            elif key in (ord('x'), ) and not self.help_mode:
-                self.stop_curses()
-                print('\n   OK, QUITTING NOW\n')
-                sys.exit(0)
-
-            elif key in (cs.KEY_ENTER, 10) and self.help_mode:
-                self.help_mode = False
-                win.set_pick_mode(False)
-
-            elif key == ord('n'):
-                win.alert(title='Info', message=f'got: {value}')
-
-            return value
-
         spin = OptionSpinner()
         spin.add_key('help_mode', '? - toggle help screen', vals=[False, True], obj=self)
 
@@ -341,8 +352,11 @@ class BTRFS:
                 # The idle timeout is our device poll: after this many seconds
                 # without a keystroke, look for a hot-plugged disk or a new
                 # mount instead of waiting for a restart.
-                _ = do_key(win.prompt(seconds=self.IDLE_POLL_SECONDS))
-            except Exception as exce:
+                _ = self._handle_key(
+                    win.prompt(seconds=self.IDLE_POLL_SECONDS), spin, win)
+            # Any failure must still restore the terminal, so this catch is
+            # deliberately broad.
+            except Exception as exce:  # pylint: disable=broad-exception-caught
                 win.stop_curses()
                 print("exception:", str(exce))
                 print(traceback.format_exc())
@@ -361,6 +375,9 @@ class BTRFS:
     def _begin_confirm(self, prompt, *, mode='yes', identity=None, seed='',
                        labels=None, action_type=None, on_confirm=None):
         """ Start an inline prompt; returns False when there is no window. """
+        # Keyword-only UI options: bundling them in a dataclass would add an
+        # indirection to every call site without making the calls clearer.
+        # pylint: disable=too-many-arguments
         if not self.win:
             return False
         self.confirm.start(action_type=action_type, identity=identity,
@@ -611,19 +628,24 @@ class BTRFS:
         return success
 
 
+    def _snap_blocker(self, subvol_ns):
+        """ Return why `subvol_ns` cannot be snapshotted, or None. """
+        if subvol_ns.snap_of:
+            return 'Cannot snap a snapshot'
+        if not subvol_ns.mount:
+            return 'Cannot snap an unmounted subvolume'
+        if subvol_ns.mount == '/.snapshots':
+            return 'Cannot snap the snapshot subvolume'
+        return None
+
     def _create_snap(self, subvol_ns=None, suffix=None):
         if not subvol_ns:
             subvol_ns = self.rows[self.win.pick_pos].subvol_ns
         dev_ns = self.devs[subvol_ns.dev]
 
-        if subvol_ns.snap_of:
-            return self._flash_error('Cannot snap a snapshot')
-
-        if not subvol_ns.mount:
-            return self._flash_error('Cannot snap an unmounted subvolume')
-
-        if subvol_ns.mount == '/.snapshots':
-            return self._flash_error('Cannot snap the snapshot subvolume')
+        blocker = self._snap_blocker(subvol_ns)
+        if blocker:
+            return self._flash_error(blocker)
 
         if not suffix:
             # Inline text prompt: the row itself names the subvolume, so the
@@ -634,8 +656,6 @@ class BTRFS:
                 seed=self._cur_snap_suffix(), action_type='snap',
                 on_confirm=lambda value: self._create_snap(subvol_ns, value))
             return None
-        if not suffix:
-            return False
 
         snap_dir = f'{dev_ns.tmp_path}{self.snap_subvol.path}'
         snap_path = f'{snap_dir}{subvol_ns.path}{suffix}'
@@ -719,7 +739,13 @@ class BTRFS:
         if isinstance(command, str):
             raise TypeError('command must be an argv sequence, not a string')
         command = [str(part) for part in command]
-        if self.DB: print('DB: +', shlex.join(command))
+        if self.db:
+            print('DB: +', shlex.join(command))
+        # Not a `with subprocess.Popen(...)`: Popen.__exit__ waits for the
+        # child, and this is the one place where communicate() must be the
+        # only blocking call (see above).  The process is short-lived and
+        # communicate() reaps it.
+        # pylint: disable=consider-using-with
         process = subprocess.Popen(command, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, cwd=cwd)
         output, err = process.communicate()
@@ -832,7 +858,7 @@ class BTRFS:
             rows, _, _ = self._slurp_command(['df', '-h', dev_ns.device_path])
             dev_ns.diskfree = rows[1] if len(rows) >= 2 else ''
             self.devs[dev] = dev_ns
-        if self.DB:
+        if self.db:
             print('DB: --->>> after load_devs()')
             for dev, ns in self.devs.items():
                 print(f'DB: {dev}: {vars(ns)}')
@@ -913,7 +939,7 @@ class BTRFS:
                 ['btrfs', 'sub', 'list', tmp_mount_dir])
             self._init_dev_subvols(dev_ns, self.parse_subvol_list(lines))
 
-        if self.DB:
+        if self.db:
             print('DB: --->>> after mount_tmps()')
             for dev, dev_ns in self.devs.items():
                 print(f'DB: {dev=}: keys={vars(dev_ns).keys()}')
@@ -964,8 +990,8 @@ class BTRFS:
                 rv.append(parsed)
         return rv
 
-    def _determine_mount_points(self):
-        mounts = self._all_mounts()
+    def _attach_mounts(self, mounts):
+        """ Copy each mount point onto the subvolume named by its subvolid. """
         self.mount_fingerprint = self._mount_fingerprint(mounts)
         for dev, mount, fstype, ident, _subvol in mounts:
             if mount == '/' and fstype != 'btrfs':
@@ -980,6 +1006,9 @@ class BTRFS:
                     if mount == '/.snapshots':
                         self.snap_subvol = subvol
                     break
+
+    def _collect_snap_targets(self):
+        """ Sort each device's top-level subvolumes and note the snap targets. """
         self.snap_targets = []
         for dev_ns in self.devs.values():
             dev_ns.subvols = sorted(dev_ns.subvols,
@@ -989,7 +1018,11 @@ class BTRFS:
                         and subvol_ns.depth == 0 and subvol_ns.mount):
                     self.snap_targets.append(subvol_ns)
 
-        if self.DB:
+    def _determine_mount_points(self):
+        """ Map mounts onto subvolumes and pick the snapshot targets. """
+        self._attach_mounts(self._all_mounts())
+        self._collect_snap_targets()
+        if self.db:
             print('DB: --->>> after determine_mount_points()')
             for subvol in self.subvol_iter():
                 if subvol.mount:
@@ -1058,7 +1091,7 @@ class BTRFS:
             else:
                 link(self.snap_subvol, subvol)
 
-        if self.DB:
+        if self.db:
             print('DB: --->>> after gather_snapshots()')
             for subvol in self.subvol_iter():
                 if subvol.snaps:
@@ -1084,7 +1117,7 @@ class BTRFS:
                     row = init_row(snap.size,
                            snap.mount, snap.dev, snap.path, snap)
                     self.rows.append(row)
-        if self.DB:
+        if self.db:
             for row in self.rows:
                 print(f'DB: row: {row.size=} {row.mount=}'
                       f' {row.dev=} {row.path=!r}')
@@ -1142,7 +1175,7 @@ class BTRFS:
             row.size = row.subvol_ns.size
         self.show_size = True
 
-        if self.DB:
+        if self.db:
             print('DB: --->>> after _get_disk_usage()')
             for ns in self.subvol_iter():
                 print(f'DB: {ns.size=} {ns.path=!r}')
@@ -1162,6 +1195,33 @@ class BTRFS:
         rv = max((len(x.dev) for x in self.rows), default=0)
         return max(len('Device'), rv)
 
+    def _add_confirm_lines(self, win):
+        """ Draw the active inline prompt as ordinary body lines. """
+        for text, attr in self._confirm_lines():
+            win.add_body(text, attr=attr)
+
+    def _add_row(self, win, row, widths, confirming):
+        """ Add one rendered listing row to the window. """
+        mounts_width, devs_width, path_width = widths
+        wds = row.path.split('@snapshots/', maxsplit=1)
+        if len(wds) < 2:
+            shown_path = row.path
+        else:
+            shown_path = f'--> {wds[1]}'
+            if row.subvol_ns.ago_str:
+                shown_path += f' {row.subvol_ns.ago_str}'
+        if row.subvol_ns.snap_of == self.snap_subvol:
+            shown_path = '!!!' + shown_path[3:]
+        mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
+        size_str = f' {"-" if row.size is None else human(row.size):>7}'
+        win.add_body(
+              f'{mount_str:>{mounts_width}}'
+              f'{size_str if self.show_size else ""}'
+              f' {row.dev:>{devs_width}}'
+              f' {shown_path:<{path_width}}')
+        if confirming and row.path == self.confirm.identity:
+            self._add_confirm_lines(win)
+
     def refresh_info(self, body=None):
         """ Redraw the listing, optionally replacing the body with messages.
 
@@ -1174,6 +1234,7 @@ class BTRFS:
         path_width = self.calc_path_width()
         mounts_width = self.calc_mounts_width()
         devs_width = self.calc_devs_width()
+        widths = (mounts_width, devs_width, path_width)
 
         win.add_fancy_header('MY-SNAPS  [s]:+snap [d]:-subvol [r]eplace-all'
              + ' [a]dd-all [u]sage [f]reshen [x]:exit [?]:help',
@@ -1198,35 +1259,11 @@ class BTRFS:
         # An active inline prompt is drawn as a normal body line, so the
         # listing stays visible instead of being covered by a dialog.
         confirming = self.confirm.active
-
-        def add_prompt():
-            for text, attr in self._confirm_lines():
-                win.add_body(text, attr=attr)
-
         if confirming and not self.confirm.identity:
-            add_prompt()
-
+            self._add_confirm_lines(win)
         for row in self.rows:
-            wds = row.path.split('@snapshots/', maxsplit=1)
-            if len(wds) < 2:
-                shown_path = row.path
-            else:
-                shown_path = f'--> {wds[1]}'
-                if row.subvol_ns.ago_str:
-                    shown_path += f' {row.subvol_ns.ago_str}'
-            if row.subvol_ns.snap_of == self.snap_subvol:
-                shown_path = '!!!' + shown_path[3:]
-            mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
-            size_str = f' {"-" if row.size is None else human(row.size):>7}'
-            win.add_body(
-                  f'{mount_str:>{mounts_width}}'
-                  f'{size_str if self.show_size else ""}'
-                  f' {row.dev:>{devs_width}}'
-                  f' {shown_path:<{path_width}}')
-            if confirming and row.path == self.confirm.identity:
-                add_prompt()
+            self._add_row(win, row, widths, confirming)
 
-btrfs = None
 
 def parse_args(argv=None):
     """ Parse the command line before anything asks for root.
@@ -1235,7 +1272,6 @@ def parse_args(argv=None):
     keeps `pip --user` installations usable and avoids a password prompt for
     a command that does no work.
     """
-    import argparse
     parser = argparse.ArgumentParser(prog='my-snaps')
     parser.add_argument('--version', action='version',
             version=f'%(prog)s {version_string()}')
@@ -1252,7 +1288,7 @@ def parse_args(argv=None):
     parser.add_argument('--cron', type=str,
             choices=('hourly', 'daily', 'weekly', 'monthly'),
             help='install a periodic snapshot anacron job')
-    parser.add_argument('--DB', action="store_true",
+    parser.add_argument('--DB', action="store_true", dest='db',
             help='add some debugging output')
     opts = parser.parse_args(argv)
     if opts.cron:
@@ -1277,33 +1313,34 @@ def parse_args(argv=None):
 
 def main(argv=None):
     """ Parse arguments, re-exec as root, then build and run the tool."""
-    global btrfs
     opts = parse_args(argv)
     # Every action that survives parsing (window, -p, -s, --cron) mounts
     # BTRFS devices under /tmp or writes /etc, so this is the first point at
     # which root is genuinely required.
     reexec_as_root('my_snaps.main', argv)
 
-    btrfs = BTRFS(opts)
-    btrfs.umount_tmps()
+    BTRFS.current = BTRFS(opts)
+    BTRFS.current.umount_tmps()
 
 def run():
-    """ Entry point"""
+    """ Entry point: leave the terminal usable whatever `main()` raises. """
     try:
         main()
     except KeyboardInterrupt:
-        if btrfs and btrfs.win:
-            btrfs.stop_curses()
+        if BTRFS.current and BTRFS.current.win:
+            BTRFS.current.stop_curses()
         print('\n   OK, QUITTING NOW\n')
         sys.exit(0)
     except BTRFSError as exce:
-        if btrfs and btrfs.win:
-            btrfs.stop_curses()
+        if BTRFS.current and BTRFS.current.win:
+            BTRFS.current.stop_curses()
         print(f'ERROR: {exce}', file=sys.stderr)
         sys.exit(1)
-    except Exception as exce:
-        if btrfs and btrfs.win:
-            btrfs.stop_curses()
+    # The final catch-all is the point of this handler: the TUI must restore
+    # the terminal and report what happened instead of dying inside curses.
+    except Exception as exce:  # pylint: disable=broad-exception-caught
+        if BTRFS.current and BTRFS.current.win:
+            BTRFS.current.stop_curses()
         print("exception:", str(exce))
         print(traceback.format_exc())
         sys.exit(15)

@@ -26,8 +26,6 @@ Create the menu by passing in:
     - payload: described above when prompt is a list or tuple
     - next: the next key
 """
-# pylint: disable=invalid-name,broad-except,too-many-instance-attributes
-# pylint: disable=too-few-public-methods
 
 import sys
 import termios
@@ -45,27 +43,50 @@ class Term:
      - https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797#file-ansi-md
     """
     esc = '\x1B'
-    # pylint: disable=missing-function-docstring,multiple-statements
+
     @staticmethod
-    def erase_line(): return f'{Term.esc}[2K'
+    def erase_line():
+        """ Sequence clearing the current line. """
+        return f'{Term.esc}[2K'
+
     @staticmethod
-    def bold(): return f'{Term.esc}[1m'
+    def bold():
+        """ Sequence enabling bold text. """
+        return f'{Term.esc}[1m'
+
     @staticmethod
-    def reverse_video(): return f'{Term.esc}[7m'
+    def reverse_video():
+        """ Sequence enabling reverse video. """
+        return f'{Term.esc}[7m'
+
     @staticmethod
-    def normal_video(): return f'{Term.esc}[m'
+    def normal_video():
+        """ Sequence returning to normal video. """
+        return f'{Term.esc}[m'
+
     @staticmethod
-    def pos_up(cnt): return f'{Term.esc}[{cnt}F' if cnt > 0 else ''
+    def pos_up(cnt):
+        """ Sequence moving the cursor up `cnt` lines. """
+        return f'{Term.esc}[{cnt}F' if cnt > 0 else ''
+
     @staticmethod
-    def pos_down(cnt): return f'{Term.esc}[{cnt}E' if cnt > 0 else ''
+    def pos_down(cnt):
+        """ Sequence moving the cursor down `cnt` lines. """
+        return f'{Term.esc}[{cnt}E' if cnt > 0 else ''
+
     @staticmethod
-    def col(pos): return f'{Term.esc}[{pos}G'
+    def col(pos):
+        """ Sequence moving the cursor to column `pos`. """
+        return f'{Term.esc}[{pos}G'
+
     @staticmethod
-    def clear_screen(): return f'{Term.esc}[H{Term.esc}[2J{Term.esc}[3J'
+    def clear_screen():
+        """ Sequence clearing the screen and the scrollback. """
+        return f'{Term.esc}[H{Term.esc}[2J{Term.esc}[3J'
 
 ####################################################################################
 
-class Menu:
+class Menu:  # pylint: disable=too-many-instance-attributes
     """ A simple menu system """
     save_attrs = None
 
@@ -255,10 +276,8 @@ class Menu:
         action += Term.col(0)
         print(action, end='', flush=True)
 
-    def _finish(self, string=''):
-        """ Complete the menu selection by moving the cursor after the
-            menu and printing any given message.
-        """
+    def _finish(self):
+        """ Complete the menu selection by moving the cursor after the menu. """
 #       cnt = 1 + len(self.lines) - self.selected
 #       action = Term.pos_down(cnt) + string
 #       print(action, flush=True)
@@ -349,7 +368,7 @@ class Menu:
 
 def runner(_): # def runner(argv):
     """ Demo entry point exercising the simple, multiline and mixed menus."""
-    
+
     def simple_menu():
         default = 'A'
         while True:
@@ -408,7 +427,7 @@ def runner(_): # def runner(argv):
             print(f'\n===> returned: {vars(picked)}')
             if 'Quit' in picked.prompt:
                 return 0
-    
+
     simple_menu()
     multiline_menu()
     mixed_menu()

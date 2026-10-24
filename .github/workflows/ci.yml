@@ -34,5 +34,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
+      - name: Lint
+        run: python -m pylint my_snaps
+
       - name: Run tests
         run: python -m pytest -v

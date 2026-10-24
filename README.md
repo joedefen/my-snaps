@@ -145,6 +145,13 @@ If you installed periodic snap scripts:
 * test with `sudo run-parts --debug -v /etc/cron.daily` (or whichever directory)
 * run `ls -ltr /tmp/.my-snaps-*` to check that it was run recently by looking at timestamps.
 
+For development, install the dev extras and run both checks from the repository root:
+```
+python -m pip install ".[dev]"
+python -m pytest
+python -m pylint my_snaps
+```
+
 ---
 
 ## Best Practices for Using this Simple Snapshot Strategy

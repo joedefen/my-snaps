@@ -155,7 +155,7 @@ def test_load_mounts_rereads_proc_mounts():
 
 def test_load_devs_only_keeps_btrfs_devices():
     self = BTRFS.__new__(BTRFS)
-    self.DB = False
+    self.db = False
     records = [
         {'NAME': 'sda1', 'PATH': '/dev/sda1', 'TYPE': 'part',
          'FSTYPE': 'ext4', 'LABEL': '', 'UUID': 'e'},
@@ -253,7 +253,7 @@ def test_init_dev_subvols_builds_tree():
 
 def _mount_point_btrfs(mounts):
     self = BTRFS.__new__(BTRFS)
-    self.DB = False
+    self.db = False
     self.devs = {}
     self.snap_subvol = None
     self.snap_targets = []

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-shared utilities fo the my-snap tools
+Shared utilities for the my-snaps tools.
 """
-# pylint: disable=broad-exception-caught,invalid-name
 
 import os
 import re
 import sys
 import time
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 
 ##############################################################################
 def timestamp_str():
@@ -57,9 +57,8 @@ def ago_str(delta_secs, signed=False):
 def version_string():
     """ Return the installed my-snaps version, or 'unknown' from a bare tree. """
     try:
-        from importlib.metadata import PackageNotFoundError, version
         return version('my-snaps')
-    except (ImportError, PackageNotFoundError):
+    except PackageNotFoundError:
         return 'unknown'
 
 ##############################################################################
@@ -92,7 +91,7 @@ def reexec_as_root(module_name, argv=None):
               file=sys.stderr)
         print('HINT: run this command as root or prefix it with sudo.',
               file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from exce
 
 ##############################################################################
 def ago_whence(filename):
@@ -104,6 +103,6 @@ def ago_whence(filename):
         try:
             dt_object = datetime.strptime(mat.group(1), "%Y-%m-%d-%H%M%S")
             return ago_str(time.time() - dt_object.timestamp())
-        except Exception:
+        except ValueError:
             pass
     return ''

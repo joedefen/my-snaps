@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-""" Program to run """
-# pylint: disable=invalid-name,broad-exception-caught
-# pylint: disable=too-many-locals,too-many-arguments
+""" Restore BTRFS subvolumes from their snapshots. """
 
+import argparse
 import sys
 import os
 import subprocess
@@ -79,7 +78,7 @@ def parse_filesystems(show_output):
             rv.append(SimpleNamespace(label=label, path=mat.group(1)))
     return rv
 
-class BtrfsRestore:
+class BtrfsRestore:  # pylint: disable=too-many-instance-attributes
     """ Mount a chosen BTRFS filesystem on /mnt and restore subvolumes.
 
     Construction is intentionally inert: it only records options and
@@ -142,7 +141,8 @@ class BtrfsRestore:
     def get_slash_mnt(self):
         """ Describe what is mounted on /mnt and record live subvolume ids. """
         rv = SimpleNamespace(device='', fstype='')
-        # /dev/mmcblk1p2 / btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=318,subvol=/eos@root 0 0
+        # /dev/mmcblk1p2 / btrfs rw,noatime,compress=zstd:3,ssd,discard=async,
+        # space_cache=v2,subvolid=318,subvol=/eos@root 0 0
         for device, mount, fstype, opts_str in iter_mounts():
             if mount == MNT:
                 rv = SimpleNamespace(device=device, fstype=fstype)
@@ -156,7 +156,7 @@ class BtrfsRestore:
                         subvolid = int(wds[1])
                     if wds[0] == 'subvol':
                         subvol = wds[1]
-                except Exception:
+                except (IndexError, ValueError):
                     pass
             if subvolid:
                 self.mounted_ids.add(subvolid)
@@ -231,7 +231,7 @@ class BtrfsRestore:
         def get_list(folder):
             try:
                 return os.listdir(folder)
-            except Exception:
+            except OSError:
                 return []
         def pr(my_list):
             return ' '.join(sorted(my_list))
@@ -244,7 +244,7 @@ class BtrfsRestore:
                     prefix = '' if rel == '.' else f'{rel}/'
                     paths.extend(f'{prefix}{name}'
                                  for name in dirnames + filenames)
-            except Exception:
+            except OSError:
                 return []
             return [mod for mod in modules
                     if any(mod in path for path in paths)]
@@ -265,28 +265,17 @@ class BtrfsRestore:
         return self.is_bootable
 
 
-    def get_state(self):
-        """ Create a dict of subvolumes that have a snapshots and/or a reverted tip
+    def _scan_list_lines(self, lines):
+        """ Classify `btrfs sub list` lines into names, snapshots and reverts.
 
-        This is strictly read-only. Pending `*ToDel` subvolumes are collected
-        in `self.todel_subpaths` for `select_restores()` to offer as explicit
-        menu actions; nothing is deleted here. Deleting at inspection time
-        meant that `my-restore --dry-run` could still destroy data, and that
-        merely starting the tool cleaned up subvolumes the user had not yet
-        finished evaluating.
+        Returns `(subnames, subs, reverts)` and records the mounted subvolume
+        paths plus the pending `*ToDel` paths on `self`.
         """
-        command_output = subprocess.check_output([
-            'btrfs', 'sub', 'list', '.']).decode('utf-8')
-        lines = command_output.split('\n')
         # ID 667 gen 216849 top level 5 path eos@my-opt
         # ID 699 gen 217076 top level 5 path eos@snapshots
         # ID 782 ... eos@snapshots/eos@root.2024-01-10-174732=Update
         # ID 791 ... eos@snapshots/eos@root.2024-01-13-084102=Daily
-        subnames = set()
-        subs = {}
-        reverts = {}
-        self.mounted_subpaths = set()
-        self.todel_subpaths = []
+        subnames, subs, reverts = set(), {}, {}
         for line in lines:
             mat = re.search(r"\bID\s+(\d+)\b.*\bpath\s+(\S+)", line)
             if not mat:
@@ -300,7 +289,7 @@ class BtrfsRestore:
             if not parent and not basename.endswith('@snapshot'):
                 if '.' in basename and basename.endswith('=Reverted'):
                     reverts[basename.split('.', 1)[0]] = subpath
-                elif not '.' in basename:
+                elif '.' not in basename:
                     subnames.add(basename)
                 elif basename.endswith('ToDel'):
                     if (subpath not in self.mounted_subpaths
@@ -315,6 +304,24 @@ class BtrfsRestore:
                     sub_snaps = subs.get(subvol, [])
                     sub_snaps.append(subpath)
                     subs[subvol] = sub_snaps
+        return subnames, subs, reverts
+
+    def get_state(self):
+        """ Create a dict of subvolumes that have a snapshots and/or a reverted tip
+
+        This is strictly read-only. Pending `*ToDel` subvolumes are collected
+        in `self.todel_subpaths` for `select_restores()` to offer as explicit
+        menu actions; nothing is deleted here. Deleting at inspection time
+        meant that `my-restore --dry-run` could still destroy data, and that
+        merely starting the tool cleaned up subvolumes the user had not yet
+        finished evaluating.
+        """
+        command_output = subprocess.check_output([
+            'btrfs', 'sub', 'list', '.']).decode('utf-8')
+        self.mounted_subpaths = set()
+        self.todel_subpaths = []
+        subnames, subs, reverts = self._scan_list_lines(
+            command_output.split('\n'))
         rv = {}
         for name in sorted(subnames):
             sub_snaps = subs.get(name, [])
@@ -384,33 +391,6 @@ class BtrfsRestore:
         selected filesystem, because every command below is relative to it.
         Returns the key to preselect the next time the menu is shown.
         """
-        def next_key(key):
-            """ Next menu key, skipping the ones reserved by `do_command()`. """
-            key = Menu.get_next_key(key)
-            while key in ('x', 'y'):
-                key = Menu.get_next_key(key)
-            return key
-
-        def advance(key, lead):
-            return next_key(key), ' '*len(lead)
-
-        def freed_name_cmd(subvol):
-            """ Free `subvol`'s name so a new subvolume can take it.
-
-            A subvolume that is the root of an active mount cannot be
-            deleted -- the kernel answers EBUSY -- and its name cannot be
-            reused while it exists. Because a mount follows the subvolume
-            id and not its name, renaming a mounted subvolume is safe: the
-            running system keeps reading the old extents until reboot, and
-            the replaced tip stays recoverable as a `*ToDel` entry that
-            `get_state()` offers for explicit deletion later.
-            """
-            if subvol in self.mounted_subpaths:
-                aside = f'{subvol}.{timestamp_str()}ToDel'
-                return f'mv "{subvol}" "{aside}" && '
-            return f'btrfs sub del "{subvol}" && '
-
-        # pylint: disable=too-many-branches
         problem = self.mnt_problem()
         if problem:
             print(f'ERROR: {problem}', file=sys.stderr)
@@ -421,19 +401,32 @@ class BtrfsRestore:
                       f'filesystem on {MNT} to inspect it', file=sys.stderr)
             sys.exit(1)
         os.chdir(MNT)
-        subs = self.get_state()
-        key, cmds = 'a', {}
+        cmds = self._commands_for_state(self.get_state())
+        return self.do_command(cmds, once=True, todo=todo)
 
+    def _commands_for_state(self, subs):
+        """ Build the menu commands offered for the subvolumes in `subs`. """
+        def next_key(key):
+            """ Next menu key, skipping the ones reserved by `do_command()`. """
+            key = Menu.get_next_key(key)
+            while key in ('x', 'y'):
+                key = Menu.get_next_key(key)
+            return key
+
+        def advance(key, lead):
+            return next_key(key), ' '*len(lead)
+
+        key, cmds = 'a', {}
         for subvol, ns in subs.items():
             lead = f'{subvol}'
             if ns.revert:
                 # The reverted tip is still present, so the *current*
                 # subvolume is the copy made by the earlier revert. Freeing
                 # its name is what makes `revert` and `restore` symmetric.
-                prep = freed_name_cmd(subvol)
-                run = self.efi_sync_cmd(subvol, ns.revert) + prep
-                run += f'mv "{ns.revert}" "{subvol}"'
-                cmds[key] = [f'{lead}: revert {ns.revert}', run]
+                prep = self._freed_name_cmd(subvol)
+                action = self.efi_sync_cmd(subvol, ns.revert) + prep
+                action += f'mv "{ns.revert}" "{subvol}"'
+                cmds[key] = [f'{lead}: revert {ns.revert}', action]
                 key, lead = advance(key, lead)
                 if ns.revert not in self.mounted_subpaths:
                     cmds[key] = [
@@ -464,7 +457,23 @@ class BtrfsRestore:
             cmds[key] = [f'del {subpath}', f'btrfs sub del "{subpath}"']
             key = next_key(key)
         cmds[key] = 'reboot now'
-        return self.do_command(cmds, once=True, todo=todo)
+        return cmds
+
+    def _freed_name_cmd(self, subvol):
+        """ Free `subvol`'s name so a new subvolume can take it.
+
+        A subvolume that is the root of an active mount cannot be deleted --
+        the kernel answers EBUSY -- and its name cannot be reused while it
+        exists. Because a mount follows the subvolume id and not its name,
+        renaming a mounted subvolume is safe: the running system keeps
+        reading the old extents until reboot, and the replaced tip stays
+        recoverable as a `*ToDel` entry that `get_state()` offers for
+        explicit deletion later.
+        """
+        if subvol in self.mounted_subpaths:
+            aside = f'{subvol}.{timestamp_str()}ToDel'
+            return f'mv "{subvol}" "{aside}" && '
+        return f'btrfs sub del "{subvol}" && '
 
     def main(self):
         """ The top-level function. """
@@ -481,7 +490,6 @@ def parse_args(argv=None):
     dry-run is parsed here too so `my-restore -n` can run unprivileged; it
     only prints the commands it would execute.
     """
-    import argparse
     parser = argparse.ArgumentParser(prog='my-restore')
     parser.add_argument('--version', action='version',
             version=f'%(prog)s {version_string()}')
@@ -502,7 +510,9 @@ def run(argv=None):
         BtrfsRestore(dry_run=opts.dry_run).main()
     except KeyboardInterrupt:
         pass
-    except Exception as exce:
+    # Last-resort reporting for an unprivileged dry-run or a failed mount;
+    # a traceback is more useful than an unspecific exit here.
+    except Exception as exce:  # pylint: disable=broad-exception-caught
         print("exception:", str(exce))
         print(traceback.format_exc())
 
