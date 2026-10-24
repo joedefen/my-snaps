@@ -19,6 +19,34 @@ LABEL_RE = re.compile(r"^\s*Label:\s+(?:'([^']*)'|(\S+))")
 #: `path /dev/sda1` appears in the per-device lines of each filesystem block.
 PATH_RE = re.compile(r"\bpath\s+(/dev/\S+)")
 
+#: The single mount point this tool operates on. Every subvolume it renames
+#: or deletes is relative to this directory, so it must be a real BTRFS mount.
+MNT = '/mnt'
+
+
+def iter_mounts():
+    """ Yield (device, mountpoint, fstype, options) from /proc/mounts. """
+    try:
+        with open('/proc/mounts', encoding='utf-8') as fh:
+            lines = fh.readlines()
+    except OSError as exce:
+        print(f'ERROR: cannot read /proc/mounts: {exce}', file=sys.stderr)
+        sys.exit(1)
+    for line in lines:
+        wds = re.split(r'\s+', line.strip())
+        if len(wds) >= 4:
+            yield wds[0], wds[1], wds[2], wds[3]
+
+
+def same_device(left, right):
+    """ Compare two device names, resolving /dev/... symlinks when possible. """
+    if left == right:
+        return True
+    if left.startswith('/dev/') and right.startswith('/dev/'):
+        return os.path.realpath(left) == os.path.realpath(right)
+    return False
+
+
 def parse_filesystems(show_output):
     """ Parse `btrfs filesystem show` into label/path entries.
 
@@ -48,13 +76,15 @@ class BtrfsRestore:
             os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
         self.dry_run = False
         self.filesystems = []
+        self.selected_fs = None
+        self.last_key = None
         self.mounted_ids = set()
         self.root_subvol = None
         self.mounted_subpaths = set()
         self.slash_mnt = self.get_slash_mnt()
         self.is_bootable = True # until proved otherwise
 
-    def do_command(self, prompts, todo=None, precmd='', once=False, force=False):
+    def do_command(self, prompts, todo=None, precmd='', once=False):
         """ TBD"""
         prompts['x'] = 'EXIT'
         while True:
@@ -64,6 +94,7 @@ class BtrfsRestore:
                         title='my-restore menu'
                           + (' DRY-RUN' if self.dry_run else ''))
             choice = menu.get_prompt_obj()
+            self.last_key = choice.key
             if choice.key == 'x':
                 self.check_bootable()
                 sys.exit(0)
@@ -72,7 +103,7 @@ class BtrfsRestore:
                 continue
             cmd = menu.get_command(choice)
             if not cmd.startswith('#'):
-                if not force and self.dry_run:
+                if self.dry_run:
                     os.system(f'echo WOULD + {precmd!r} {cmd!r}')
                 elif 'reboot' not in cmd or self.check_bootable():
                     os.system(f'clear;set -x; {precmd} {cmd}')
@@ -81,20 +112,11 @@ class BtrfsRestore:
                 return todo
 
     def get_slash_mnt(self):
-        """ TBD """
-        def slurp_file(pathname):
-            with open(pathname, "r", encoding='utf-8') as fh:
-                return [line.strip() for line in fh]
-
+        """ Describe what is mounted on /mnt and record live subvolume ids. """
         rv = SimpleNamespace(device='', fstype='')
-        lines = slurp_file('/proc/mounts')
         # /dev/mmcblk1p2 / btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=318,subvol=/eos@root 0 0
-        for line in lines:
-            wds = re.split(r'\s+', line)
-            if len(wds) < 4:
-                continue
-            device, mount, fstype, opts_str = wds[0], wds[1], wds[2], wds[3]
-            if mount == '/mnt':
+        for device, mount, fstype, opts_str in iter_mounts():
+            if mount == MNT:
                 rv = SimpleNamespace(device=device, fstype=fstype)
             if fstype != 'btrfs':
                 continue
@@ -115,6 +137,27 @@ class BtrfsRestore:
 
         return rv
 
+    def mount_choices(self):
+        """ Map menu keys to the commands that put a filesystem on /mnt.
+
+        The unmount target is the mount point itself, never `/dev`: as root,
+        `umount /dev` can tear down devtmpfs, and if it fails the `&&`
+        short-circuits and leaves the chosen filesystem unmounted while
+        `select_restores()` happily inspects whatever is on /mnt.
+        """
+        cmds, todo = {}, '-'
+        mounted = self.slash_mnt.device
+        for idx, fs in enumerate(self.filesystems):
+            if fs.path == mounted:
+                cmd = f'# KEEP {fs.path!r} mounted on {MNT}'
+            else:
+                prefix = f'umount {MNT} && ' if mounted else ''
+                label = fs.label if fs.label else 'no-label'
+                cmd = f'{prefix}mount {fs.path} {MNT} # {label}'
+            cmds[str(idx)] = cmd
+            todo = '0'
+        return cmds, todo
+
     def select_mount(self):
         """ Choose which BTRFS filesystem gets mounted on /mnt """
         try:
@@ -127,18 +170,17 @@ class BtrfsRestore:
         if not self.filesystems:
             print('ERROR: no BTRFS filesystems found', file=sys.stderr)
             sys.exit(1)
-        cmds, todo, mnt = {}, '-', self.slash_mnt
-        for idx, fs in enumerate(self.filesystems):
-            if fs.path == mnt.device:
-                cmd = f'# KEEP {fs.path!r} mounted on /mnt'
-            else:
-                cmd = 'umount /dev && ' if mnt.device else ''
-                label = fs.label if fs.label else 'no-label'
-                cmd += f'mount {fs.path} /mnt # {label}'
-            cmds[str(idx)] = cmd
-            todo = '0'
-        todo = self.do_command(cmds, todo, once=True, force=True)
-    
+        cmds, todo = self.mount_choices()
+        valid_keys = set(cmds) # `do_command()` adds 'x' and 'y' to `cmds`
+        # `do_command()` honors dry-run, so the mount may deliberately not
+        # have happened; `mnt_problem()` verifies the result before anything
+        # else is allowed to touch /mnt.
+        self.do_command(cmds, todo, once=True)
+        if self.last_key not in valid_keys:
+            print(f'ERROR: unexpected selection {self.last_key!r}', file=sys.stderr)
+            sys.exit(1)
+        self.selected_fs = self.filesystems[int(self.last_key)]
+
     def check_bootable(self):
         """ Check whether /usr/lib/modules, /efi/, and /.efi-back/ agree"""
         def get_list(folder):
@@ -153,7 +195,7 @@ class BtrfsRestore:
         efis = get_list('/efi/????????????????????????????????')
         if not efis or not self.root_subvol:
             return True
-        root = os.path.join('/mnt', self.root_subvol)
+        root = os.path.join(MNT, self.root_subvol)
         mods = get_list(f'{root}/usr/lib/modules')
         backs = get_list(f'{root}/.efi-back/????????????????????????????????')
         overlap = set(mods) & set(efis) & set(backs)
@@ -217,6 +259,25 @@ class BtrfsRestore:
         # for name, ns in rv.items(): print(f'{name}: {ns}')
         return rv
 
+    def mnt_problem(self):
+        """ Return why /mnt is unsafe to operate on, or '' when it is fine.
+
+        `select_restores()` runs `btrfs sub` commands relative to /mnt. If
+        the selected filesystem is not actually mounted there -- dry-run, a
+        failed `mount`, or a later manual unmount -- /mnt is just a
+        directory on the root filesystem and those commands would rename or
+        delete subvolumes belonging to the wrong filesystem.
+        """
+        for device, mount, fstype, _ in iter_mounts():
+            if mount != MNT:
+                continue
+            if fstype != 'btrfs':
+                return f'{MNT} holds {fstype} ({device}), not BTRFS'
+            if self.selected_fs and not same_device(device, self.selected_fs.path):
+                return f'{MNT} holds {device}, not {self.selected_fs.path}'
+            return ''
+        return f'nothing is mounted on {MNT}'
+
     def select_restores(self, todo='a'):
         """ TBD """
         def advance(key, lead):
@@ -229,7 +290,16 @@ class BtrfsRestore:
             return sync
 
         # pylint: disable=too-many-branches
-        os.chdir('/mnt')
+        problem = self.mnt_problem()
+        if problem:
+            print(f'ERROR: {problem}', file=sys.stderr)
+            print(f'ERROR: refusing to touch subvolumes outside {MNT}',
+                  file=sys.stderr)
+            if self.dry_run:
+                print(f'HINT: dry-run does not mount; mount the chosen '
+                      f'filesystem on {MNT} to inspect it', file=sys.stderr)
+            sys.exit(1)
+        os.chdir(MNT)
         subs = self.get_state()
         key, cmds = 'a', {}
 
