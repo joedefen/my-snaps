@@ -90,7 +90,11 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
     def __init__(self, opts):
         self.tmp_dir = '/tmp/.btrfs/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
+        # Keyed by filesystem UUID (or by device name when no UUID exists),
+        # so a multi-device filesystem appears once, not once per member.
         self.devs = {}
+        # Every member name and display alias -> key in `self.devs`.
+        self.dev_aliases = {}
         self.snap_targets = [] # the potential subvols to snapshot
         self.label_set = set() # all labels of current snapshots
         self.snap_subvol = None
@@ -776,6 +780,11 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         """ Return the full path to a dev (aka device basename) """
         return f'/dev/{dev}'
 
+    def _dev_ns(self, dev):
+        """ The device namespace for a filesystem key, alias or member name. """
+        aliases = getattr(self, 'dev_aliases', {})
+        return self.devs.get(aliases.get(dev, dev))
+
     LSBLK_FIELDS = 'NAME,PATH,TYPE,FSTYPE,LABEL,UUID'
 
     @staticmethod
@@ -851,28 +860,66 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
             return True
         return False
 
+    @staticmethod
+    def _record_name(rec):
+        """ The block-device basename of one device-scan record. """
+        return rec.get('NAME') or os.path.basename(rec.get('PATH', ''))
+
     def _load_devs(self):
-        """ Discover all the BTRFS Devices (no probing, see _scan_block_devices) """
+        """ Discover BTRFS filesystems (no probing, see _scan_block_devices).
+
+        Every member of a multi-device BTRFS filesystem reports the same
+        filesystem UUID.  Grouping the scan records by that UUID gives one
+        `devs` entry per filesystem, so it is mounted, counted and listed
+        once instead of once per member.  Devices without a UUID cannot be
+        grouped and keep the old per-device behaviour.
+
+        `dev_ns.dev` stays the short name used in the device column and in
+        the temporary mount directory: the first member's name for a
+        single-device filesystem, or `<first>+<others>` when the filesystem
+        has more members.  `dev_ns.device_path` is a real member device (any
+        member mounts the whole filesystem) and `dev_ns.members` keeps every
+        member name.
+        """
         records = self._scan_block_devices()
         self.dev_fingerprint = self._fingerprint_records(records)
         self.devs = {}
+        self.dev_aliases = {}
+        by_fs = {}
         for rec in records:
             if rec.get('FSTYPE') != 'btrfs' or rec.get('TYPE') == 'rom':
                 continue
-            dev = rec.get('NAME') or os.path.basename(rec.get('PATH', ''))
-            if not dev:
+            name = self._record_name(rec)
+            if not name:
                 continue
+            key = rec.get('UUID') or name
+            by_fs.setdefault(key, []).append((name, rec))
+
+        for key, members in by_fs.items():
+            members.sort(key=lambda item: item[0])
+            primary_name, primary = members[0]
+            member_names = [name for name, _rec in members]
+            others = len(member_names) - 1
+            dev = primary_name if not others else f'{primary_name}+{others}'
             dev_ns = SimpleNamespace(
                     dev=dev,
-                    device_path=rec.get('PATH') or self.dev_path(dev),
-                    label=rec.get('LABEL', ''), uuid=rec.get('UUID', ''))
+                    device_path=primary.get('PATH')
+                    or self.dev_path(primary_name),
+                    label=next((rec.get('LABEL', '') for _name, rec in members
+                                if rec.get('LABEL')), ''),
+                    uuid=primary.get('UUID', ''),
+                    members=member_names)
             rows, _, _ = self._slurp_command(['df', '-h', dev_ns.device_path])
             dev_ns.diskfree = rows[1] if len(rows) >= 2 else ''
-            self.devs[dev] = dev_ns
+            self.devs[key] = dev_ns
+            self.dev_aliases[key] = key
+            self.dev_aliases[dev] = key
+            for name in member_names:
+                self.dev_aliases[name] = key
         if self.db:
             print('DB: --->>> after load_devs()')
-            for dev, ns in self.devs.items():
-                print(f'DB: {dev}: {vars(ns)}')
+            for key, ns in self.devs.items():
+                print(f'DB: {key=}: {vars(ns)}')
 
     @staticmethod
     def init_subvol_ns(dev='', path='', ident=None, parent=None):
@@ -940,7 +987,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
         Returns the mount dir, or None when the mount fails.
         """
-        dev_ns = self.devs.get(dev)
+        dev_ns = self._dev_ns(dev)
         if dev_ns is None:
             return None
         # Older versions mounted the device directly at `<tmp_dir>/<dev>`.
@@ -984,11 +1031,11 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         """ mount each btrfs as needed """
         os.makedirs(self.tmp_dir, exist_ok=True)
         dev_count = len(self.devs)
-        for dev_ndx, (dev, dev_ns) in enumerate(self.devs.items(), start=1):
+        for dev_ndx, dev_ns in enumerate(self.devs.values(), start=1):
             self._progress(
                 'Reading BTRFS state. Be patient ... [3/5] '
-                f'mounting {dev} ({dev_ndx}/{dev_count})')
-            tmp_mount_dir = self._ensure_tmp_mount(dev, 'ro')
+                f'mounting {dev_ns.dev} ({dev_ndx}/{dev_count})')
+            tmp_mount_dir = self._ensure_tmp_mount(dev_ns.dev, 'ro')
             if tmp_mount_dir is None:
                 raise BTRFSError(
                     f'cannot mount {dev_ns.dev} under {self.tmp_dir} to read '
@@ -999,8 +1046,9 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
         if self.db:
             print('DB: --->>> after mount_tmps()')
-            for dev, dev_ns in self.devs.items():
-                print(f'DB: {dev=}: keys={vars(dev_ns).keys()}')
+            for key, dev_ns in self.devs.items():
+                print(f'DB: {key=}: {dev_ns.dev=} '
+                      f'{dev_ns.members=} keys={vars(dev_ns).keys()}')
             for subvol in self.subvol_iter():
                 print(f'DB:   {"  "*subvol.depth}subvol: {vars(subvol)}')
 
@@ -1163,8 +1211,8 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
                 continue
             of_path = f'/{mat.group(1)}'
             remainder = wds[1][len(of_path):] # everything after the .
-            dev_ns = self.devs[subvol.dev]
-            of_subvol = dev_ns.paths.get(of_path, None)
+            dev_ns = self._dev_ns(subvol.dev)
+            of_subvol = dev_ns.paths.get(of_path, None) if dev_ns else None
             if of_subvol:
                 link(of_subvol, subvol)
             else:
@@ -1188,13 +1236,13 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
         self.rows = []
 
-        for dev, dev_ns in self.devs.items():
+        for dev_ns in self.devs.values():
             for ns in dev_ns.subvols:
-                row = init_row(ns.size, ns.mount, dev, ns.path, ns)
+                row = init_row(ns.size, ns.mount, dev_ns.dev, ns.path, ns)
                 self.rows.append(row)
                 for snap in ns.snaps:
                     row = init_row(snap.size,
-                           snap.mount, snap.dev, snap.path, snap)
+                           snap.mount, dev_ns.dev, snap.path, snap)
                     self.rows.append(row)
         if self.db:
             for row in self.rows:
@@ -1219,7 +1267,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
         if not self.snap_subvol:
             return
-        dev_ns = self.devs.get(self.snap_subvol.dev, None)
+        dev_ns = self._dev_ns(self.snap_subvol.dev)
         if not dev_ns:
             return
 

@@ -170,13 +170,62 @@ def test_load_devs_only_keeps_btrfs_devices():
 
     self._load_devs()
 
-    assert set(self.devs) == {'nvme0n1p2'}
-    dev_ns = self.devs['nvme0n1p2']
+    # A BTRFS filesystem is keyed by its UUID, not by a member device name.
+    assert set(self.devs) == {'b'}
+    dev_ns = self.devs['b']
+    assert dev_ns.dev == 'nvme0n1p2'
     assert dev_ns.device_path == '/dev/nvme0n1p2'
     assert dev_ns.label == 'btrfs-common'
     assert dev_ns.uuid == 'b'
+    assert dev_ns.members == ['nvme0n1p2']
     assert dev_ns.diskfree == 'df-line'
     assert self.dev_fingerprint == BTRFS._fingerprint_records(records)
+
+
+def test_load_devs_groups_multi_device_filesystems_by_uuid():
+    """ One filesystem UUID, one mount, one `df`, one listing entry. """
+    self = BTRFS.__new__(BTRFS)
+    self.db = False
+    records = [
+        {'NAME': 'sdb1', 'PATH': '/dev/sdb1', 'TYPE': 'part',
+         'FSTYPE': 'btrfs', 'LABEL': 'pool', 'UUID': 'shared'},
+        {'NAME': 'sda1', 'PATH': '/dev/sda1', 'TYPE': 'part',
+         'FSTYPE': 'btrfs', 'LABEL': 'pool', 'UUID': 'shared'},
+    ]
+    df_calls = []
+
+    def slurp(cmd):
+        df_calls.append(list(cmd))
+        return ['Filesystem  Size', 'pool-df-line'], [], 0
+
+    self._scan_block_devices = lambda: records
+    self._slurp_command = slurp
+
+    self._load_devs()
+
+    assert set(self.devs) == {'shared'}
+    dev_ns = self.devs['shared']
+    assert dev_ns.dev == 'sda1+1'
+    assert dev_ns.members == ['sda1', 'sdb1']
+    assert dev_ns.device_path == '/dev/sda1'
+    assert df_calls == [['df', '-h', '/dev/sda1']]
+    # Every member name resolves to the filesystem's one device namespace.
+    assert self._dev_ns('sda1') is dev_ns
+    assert self._dev_ns('sdb1') is dev_ns
+    assert self._dev_ns('sda1+1') is dev_ns
+    assert self._dev_ns('shared') is dev_ns
+
+
+def test_make_rows_shows_the_filesystem_alias_not_its_uuid():
+    self = BTRFS.__new__(BTRFS)
+    self.db = False
+    self.rows = []
+    subvol = BTRFS.init_subvol_ns(dev='sda1+1', path='/@root', ident='256')
+    self.devs = {'shared': SimpleNamespace(dev='sda1+1', subvols=[subvol])}
+
+    self.make_rows()
+
+    assert [row.dev for row in self.rows] == ['sda1+1']
 
 
 ###############################################################################
