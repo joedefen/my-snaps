@@ -88,8 +88,10 @@ Next you'll see a screen like this:
   * **restore**: promotes the snapshot to current
   * **revert**: moves the reversion back to current
   * **del**: deletes the reversion; **note**: delay deletion until a restore passes muster.
+  * **del ...ToDel**: deletes a subvolume left behind by a revert of a mounted subvolume; these are offered but never removed unless you pick them.
 * when done with restores, reboot the system.
-* to verify what would be done when choosing an action, you can put the tool in "dry-run" mode.
+* to verify what would be done when choosing an action, you can put the tool in "dry-run" mode (`my-restore -n`). Dry-run only prints the commands: it never changes mounts and never deletes subvolumes.
+* listing the state is always read-only, so simply launching `my-restore` (with or without `-n`) cannot delete anything.
 
 **Theory**: To restore a snapshot of the subvolume called "{subv}":
 * normally, {subv} is renamed "{subv}.YYYY-MM-DD-HHMMSS=Reverted"; buf, if already reverted, {subv} simply removed, and
@@ -99,7 +101,8 @@ Next you'll see a screen like this:
 **------------- IMPORTANT NOTES -------------**
 
 **When a restore is tested and deemed satisfactory then clean up.**
-* To clean up, launch `my-snaps` or `my-restore` and delete "=Reverted" subvolumes.
+* To clean up, launch `my-snaps` or `my-restore` and delete "=Reverted" subvolumes (and any "del ...ToDel" entries `my-restore` offers).
+* Deletion is always an explicit menu choice: `my-restore` does not sweep up leftovers on startup.
 * **Warning**: Failing to clean up will confuse the next `my-restore` and waste space.
 
 **When a restore is tested and deemed unsatisfactory:**

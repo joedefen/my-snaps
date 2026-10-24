@@ -81,6 +81,7 @@ class BtrfsRestore:
         self.mounted_ids = set()
         self.root_subvol = None
         self.mounted_subpaths = set()
+        self.todel_subpaths = []
         self.slash_mnt = self.get_slash_mnt()
         self.is_bootable = True # until proved otherwise
 
@@ -208,7 +209,15 @@ class BtrfsRestore:
 
 
     def get_state(self):
-        """ Create a dict of subvolumes that have a snapshots and/or a reverted tip """
+        """ Create a dict of subvolumes that have a snapshots and/or a reverted tip
+
+        This is strictly read-only. Pending `*ToDel` subvolumes are collected
+        in `self.todel_subpaths` for `select_restores()` to offer as explicit
+        menu actions; nothing is deleted here. Deleting at inspection time
+        meant that `my-restore --dry-run` could still destroy data, and that
+        merely starting the tool cleaned up subvolumes the user had not yet
+        finished evaluating.
+        """
         command_output = subprocess.check_output([
             'btrfs', 'sub', 'list', '.']).decode('utf-8')
         lines = command_output.split('\n')
@@ -220,6 +229,7 @@ class BtrfsRestore:
         subs = {}
         reverts = {}
         self.mounted_subpaths = set()
+        self.todel_subpaths = []
         for line in lines:
             mat = re.search(r"\bID\s+(\d+)\b.*\bpath\s+(\S+)", line)
             if not mat:
@@ -236,9 +246,9 @@ class BtrfsRestore:
                 elif not '.' in basename:
                     subnames.add(basename)
                 elif basename.endswith('ToDel'):
-                    if subpath not in self.mounted_subpaths:
-                        cmd = f'btrfs sub del "{subpath}"'
-                        os.system(f'set -x; {cmd}')
+                    if (subpath not in self.mounted_subpaths
+                            and subpath not in self.todel_subpaths):
+                        self.todel_subpaths.append(subpath)
                     continue
                 continue
             if parent.endswith('@snapshots'):
@@ -280,8 +290,15 @@ class BtrfsRestore:
 
     def select_restores(self, todo='a'):
         """ TBD """
+        def next_key(key):
+            """ Next menu key, skipping the ones reserved by `do_command()`. """
+            key = Menu.get_next_key(key)
+            while key in ('x', 'y'):
+                key = Menu.get_next_key(key)
+            return key
+
         def advance(key, lead):
-            return Menu.get_next_key(key), ' '*len(lead)
+            return next_key(key), ' '*len(lead)
 
         def sync_cmd(subvol, whence):
             sync, efi_back = '', os.path.join(whence, '.efi-back')
@@ -333,6 +350,13 @@ class BtrfsRestore:
                     f'{prep}{sync}btrfs sub snap "{snap}" "{subvol}"', # actual cmd
                 ]
                 key, lead = advance(key, lead)
+        # `*ToDel` subvolumes are leftovers of a revert that replaced a mounted
+        # subvolume. They are only offered here, after the user has had a
+        # chance to boot and test the restored system; `do_command()` honors
+        # dry-run, so nothing is deleted until an entry is explicitly chosen.
+        for subpath in self.todel_subpaths:
+            cmds[key] = [f'del {subpath}', f'btrfs sub del "{subpath}"']
+            key = next_key(key)
         cmds[key] = 'reboot now'
         return self.do_command(cmds, once=True, todo=todo)
 
