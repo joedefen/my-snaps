@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+# runner.py
+# Located in the top-level APP directory
+# Wrapper to run APP from source for debugging
+#
+# Usage:
+#   ./runner [TOOL] [ARGS...]
+#
+# TOOL defaults to 'my-snaps'.  Available tools:
+#   my-snaps         (my_snaps.main)
+#   my-restore       (my_snaps.my_restore)
+#   bt-smart-balance (my_snaps.bt_smart_balance)
+#
+# Run with the project venv for the same environment as the
+# installed console scripts, e.g.:
+#   .venv/bin/python ./runner my-snaps --print
+
+import runpy
+import sys
+
+TOOLS = {
+    'my-snaps': 'my_snaps.main',
+    'my-restore': 'my_snaps.my_restore',
+    'bt-smart-balance': 'my_snaps.bt_smart_balance',
+}
+
+# Ensure the package's top directory is on the path so 'my_snaps' can be found.
+# This is usually necessary for debuggers to work correctly.
+# sys.path.insert(0, '.')
+
+# Execute the main module of your package.
+# This mimics the behavior of the 'python -m my_snaps.main' command.
+if __name__ == '__main__':
+    argv = sys.argv[1:]
+    tool = 'my-snaps'
+    if argv and argv[0] in TOOLS:
+        tool = argv.pop(0)
+    # This makes sys.argv look like the real command execution
+    sys.argv = [tool] + argv
+    runpy.run_module(TOOLS[tool], run_name='__main__', alter_sys=True)
