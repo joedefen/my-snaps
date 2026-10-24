@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "my-snaps"
-version = "1.0.7"
+version = "1.0.9"
 description = "Simple BTRFS Snapshot Tools"
 authors = [
     {name = "Joe Defen", email = "joedef@duck.com"},
@@ -12,6 +12,9 @@ authors = [
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.8"
+dependencies = [
+    "console-window >= 1.0.0",
+]
 keywords = ["BTRFS", "snapshot", "restore", "balance", ]
 classifiers = [
     "Programming Language :: Python :: 3",

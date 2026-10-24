@@ -23,7 +23,7 @@ import traceback
 import subprocess
 import curses as cs
 from types import SimpleNamespace
-from my_snaps.PowerWindow import Window, OptionSpinner
+from console_window import ConsoleWindow, OptionSpinner
 from my_snaps.MyUtils import human, ago_whence, timestamp_str
 
 ##############################################################################
@@ -206,7 +206,7 @@ class BTRFS:
         base_keys_we_handle=[cs.KEY_ENTER,
                 10, ord('s'), ord('d'), ord('u'), ord('r'), ord('a'), ord('x')]
 
-        win = self.win = Window(keys=set(list(spin.keys) + list(base_keys_we_handle)))
+        win = self.win = ConsoleWindow(keys=set(list(spin.keys) + list(base_keys_we_handle)))
 
         for _ in range(100000000000):
             if self.help_mode:
