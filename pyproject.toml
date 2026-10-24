@@ -11,13 +11,20 @@ authors = [
 ]
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
-    "console-window == 2.0.0.10",
+    # Range, not an exact pin: the dependency published 31 releases in about
+    # 26 hours, and an exact pin makes every install a potential resolution
+    # failure. The floor is the first release with the inline-editor caret
+    # support this package uses.
+    "console-window >= 2.0.0.10, <3",
 ]
 keywords = ["BTRFS", "snapshot", "restore", "balance", ]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux"
 ]

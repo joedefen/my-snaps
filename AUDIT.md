@@ -37,7 +37,9 @@ That last point matters for the audit: the bugs below are in the code you are ru
 
 ## Defects found
 
-### P0 — can silently break the core promise
+> **Status as of 2026-10-24:** ✅ = fixed in the working tree and covered by tests; ⏳ = partially done; unmarked = still open. Fixed: defects 1–8 and minimum-fix items 1–7 and 11. Still open: minimum-fix items 8–10 and 12 (⏳), plus the P1 items other than 7–8.
+
+### P0 — can silently break the core promise (all fixed ✅)
 
 1. ✅ **`_slurp_command()` reports every failed `btrfs` command as success.**
    [`_slurp_command()`](my_snaps/main.py#L355) calls `process.wait()` and then applies [`os.WEXITSTATUS(status)`](my_snaps/main.py#L363). `Popen.wait()` already returns an exit code (0–255), so `os.WEXITSTATUS(1) == 0`. I verified with `true`, `false`, and `sh -c "exit 42"`: all three returned code `0`.
@@ -63,7 +65,7 @@ That last point matters for the audit: the bugs below are in the code you are ru
 ### P1 — correctness, safety, and portability
 
 7. ✅ **`rsync -a -del` does not delete stale `/efi` entries.** [`sync_cmd()`](my_snaps/my_restore.py#L198) generates `rsync -a -del -H` at [`line 201`](my_snaps/my_restore.py#L201); the intended option is `--delete`. I verified that an extra stale file remains in the destination with `-del`, so the `.efi-back` mirroring is incomplete. **Fixed:** [`efi_sync_cmd()`](my_snaps/my_restore.py#L294) emits `rsync -a -H --delete`, refuses an empty `.efi-back` or a `/efi` that is not a mount point, and runs before the rename to `=Reverted`; tests in [`tests/test_restore_efi_sync.py`](tests/test_restore_efi_sync.py).
-8. **Python metadata disagrees with itself.** [`requires-python`](pyproject.toml#L14) says `>=3.8`; the README says Python 3.11+; the pinned `console-window` 2.0.0.10 requires `>=3.10`. On 3.8/3.9 the local install cannot resolve its dependency. Also prefer `console-window>=2.0.0.10,<3` over an exact pin: the dependency had 31 releases and five uploads within roughly 26 hours.
+8. ✅ **Python metadata disagrees with itself.** [`requires-python`](pyproject.toml#L14) says `>=3.8`; the README says Python 3.11+; the pinned `console-window` 2.0.0.10 requires `>=3.10`. On 3.8/3.9 the local install cannot resolve its dependency. Also prefer `console-window>=2.0.0.10,<3` over an exact pin: the dependency had 31 releases and five uploads within roughly 26 hours. **Fixed:** 3.11 is the declared baseline (`requires-python = ">=3.11"`, classifiers for 3.11–3.13) and the dependency is a range (`console-window >= 2.0.0.10, <3`).
 9. **Root re-exec happens before argument parsing.** `my-snaps --help`, `my-restore -n`, and `bt-smart-balance --help` all invoke sudo before argparse. That is poor UX and makes `pip --user` installs fragile. Parse arguments first; only re-exec for actions that actually need root.
 10. **Non-interactive error paths crash instead of reporting.** [`_create_snap()`](my_snaps/main.py#L293) and [`_del_subvolume()`](my_snaps/main.py#L329) call `self.win.alert` on failure, but `self.win` is `None` in `-s`/cron mode. A real `btrfs` error is replaced by `AttributeError: 'NoneType' object has no attribute 'alert'`.
 11. **`process.wait()` before `communicate()` can deadlock.** If `btrfs sub list` or `df` produces more than the pipe buffer, the child blocks writing while the parent waits. With many snapshots this is plausible.
@@ -78,7 +80,7 @@ That last point matters for the audit: the bugs below are in the code you are ru
 
 ### P2 — maintenance and discoverability
 
-- No test suite, CI, tags, changelog, `SECURITY.md`, issue templates, or man page. For a root-owned destructive tool, that is the biggest adoption blocker.
+- ⏳ No test suite, CI, tags, changelog, `SECURITY.md`, issue templates, or man page. For a root-owned destructive tool, that is the biggest adoption blocker. **Update:** a pytest suite (113 tests) and a CI workflow now exist; tags, changelog, `SECURITY.md`, issue templates, and a man page are still missing.
 - Broad `pylint: disable` headers and “TBD” docstrings make contribution harder than the code size suggests.
 - The GitHub description (“Basic upgrade and BTRFS tools for Fedora and EOS”) no longer matches the PyPI summary (“Simple BTRFS Snapshot Tools”).
 - The local version was not bumped after the dependency change; `runner` is a debug convenience, not a test harness.
@@ -128,17 +130,17 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 
 ## Minimum fix list, in order
 
-1. **Fix `_slurp_command()`:** `out, err = process.communicate()`, then return `process.returncode`; decode with `errors='replace'`.
-2. **Fix `balance_filesystem()`:** use `self.opts.dusage`, keep the full `btrfs balance start -dusage=... --bg ...` command, and guard `device_size == 0`.
-3. **Fix `select_mount()`:** initialize `label = ''` per filesystem, accept `Label: none`, and change `umount /dev` to `umount /mnt`.
-4. **Fix restore-after-revert:** rename the current subvolume to `.ToDel` instead of `btrfs sub del` on a mounted subvolume, or refuse with a clear message.
-5. **Make dry-run dry:** skip `*ToDel` deletion and forced mounts when `self.dry_run` is set.
-6. **Fix `rsync -a -del` → `rsync -a --delete`**.
-7. **Bump the version and align metadata:** `requires-python = ">=3.10"` (or 3.11 per README), `console-window>=2.0.0.10,<3`.
+1. ✅ **Fix `_slurp_command()`:** `out, err = process.communicate()`, then return `process.returncode`; decode with `errors='replace'`.
+2. ✅ **Fix `balance_filesystem()`:** use `self.opts.dusage`, keep the full `btrfs balance start -dusage=... --bg ...` command, and guard `device_size == 0`.
+3. ✅ **Fix `select_mount()`:** initialize `label = ''` per filesystem, accept `Label: none`, and change `umount /dev` to `umount /mnt`.
+4. ✅ **Fix restore-after-revert:** rename the current subvolume to `.ToDel` instead of `btrfs sub del` on a mounted subvolume, or refuse with a clear message.
+5. ✅ **Make dry-run dry:** skip `*ToDel` deletion and forced mounts when `self.dry_run` is set.
+6. ✅ **Fix `rsync -a -del` → `rsync -a --delete`**. Done as `rsync -a -H --delete`, with guards that refuse an empty `.efi-back` or an unmounted `/efi` ([`efi_sync_cmd()`](my_snaps/my_restore.py#L294)); see defect 7.
+7. ✅ **Bump the version and align metadata:** `requires-python = ">=3.10"` (or 3.11 per README), `console-window>=2.0.0.10,<3`. Done: 3.11 is the baseline (`requires-python = ">=3.11"`, classifiers 3.11–3.13) and the dependency is the requested range; the version is already `2.0.0`.
 8. **Parse args before sudo**, and add `--version`.
 9. **Guard `self.win`** in non-interactive paths; print errors to stderr and exit nonzero.
 10. **Replace `assert` with explicit errors**, quote paths or use argv lists, and add `subvolid=5` to temporary mounts.
-11. **Add a pytest suite with a fake `btrfs` executable in `PATH`** covering: nonzero exit propagation, `Label: none` parsing, restore command generation, retention counts, dry-run behavior, and the `*ToDel` policy.
-12. **Add GitHub Actions** running ruff and pytest on 3.10–3.13; tag `v1.1.0`; add a CHANGELOG and update the stale GitHub description.
+11. ✅ **Add a pytest suite with a fake `btrfs` executable in `PATH`** covering: nonzero exit propagation, `Label: none` parsing, restore command generation, retention counts, dry-run behavior, and the `*ToDel` policy. Done: 113 tests in [`tests/`](tests), including fake `btrfs`/`lsblk`/`rsync` executables and the `/efi` mirror guards.
+12. ⏳ **Add GitHub Actions** running ruff and pytest on 3.10–3.13; tag `v1.1.0`; add a CHANGELOG and update the stale GitHub description. CI exists at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) but runs pytest only, on Python 3.11 alone; the ruff step, wider matrix, tag, CHANGELOG, and description update are still open.
 
 The single most important sentence in this audit: **fix item 1 before the next system update.** The tool currently cannot tell you whether the snapshot it just created actually exists.
