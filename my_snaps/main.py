@@ -23,7 +23,7 @@ import traceback
 import subprocess
 import curses as cs
 from types import SimpleNamespace
-from console_window import ConsoleWindow, OptionSpinner
+from console_window import ConsoleWindow, ConsoleWindowOpts, OptionSpinner
 from my_snaps.MyUtils import human, ago_whence, timestamp_str
 
 ##############################################################################
@@ -240,7 +240,8 @@ class BTRFS:
         base_keys_we_handle=[cs.KEY_ENTER,
                 10, ord('s'), ord('d'), ord('u'), ord('r'), ord('a'), ord('x')]
 
-        win = self.win = ConsoleWindow(keys=set(list(spin.keys) + list(base_keys_we_handle)))
+        win = self.win = ConsoleWindow(opts=ConsoleWindowOpts(
+            keys=set(list(spin.keys) + list(base_keys_we_handle))))
 
         for _ in range(100000000000):
             if self.help_mode:
@@ -294,6 +295,8 @@ class BTRFS:
                 suffix = self.win.answer(
                     f'Set snap suffix OR clear; labels: {",".join(list(self.label_set))}',
                         seed=suffix if suffix else self._cur_snap_suffix())
+                if suffix is None:  # user aborted (ESC) the dialog
+                    return success
                 if suffix and (len(suffix) < 5 or suffix[:1] != '.'
                             or any(x in suffix[1:] for x in './')):
                     self.win.alert(
@@ -345,6 +348,8 @@ class BTRFS:
             seed=self._cur_snap_suffix()
             suffix = self.win.answer(
                 f'Set suffix for snap "{subvol_ns.path}" OR clear', seed=seed)
+            if suffix is None:  # user aborted (ESC) the dialog
+                return False
         if not suffix:
             return False
 
@@ -354,8 +359,7 @@ class BTRFS:
         cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
         out, err, code = self._slurp_command(cmd)
         if code:
-            self.win.alert(f'FAILED({code}): {cmd}', message='\n'.join(out + err),
-                           height=len(out)+len(err))
+            self.win.alert(f'FAILED({code}): {cmd}\n' + '\n'.join(out + err))
             return False
         self.dirty = True
         return True
@@ -371,6 +375,8 @@ class BTRFS:
 
         if not ans:
             ans = self.win.answer(f'Type "y" to Delete "{subvol_ns.path}"')
+            if ans is None:  # user aborted (ESC) the dialog
+                return False
         if not ans.strip().lower().startswith('y'):
             return False
 
@@ -380,8 +386,7 @@ class BTRFS:
             cmd = f'btrfs sub del {snap_path}'
             out, err, code = self._slurp_command(cmd)
             if code:
-                self.win.alert('FAILED: {cmd}', message='\n'.join(out + err),
-                               height=len(out)+len(err))
+                self.win.alert(f'FAILED: {cmd}\n' + '\n'.join(out + err))
                 return False
             self.dirty = True
         return True
@@ -541,6 +546,8 @@ class BTRFS:
 
     @staticmethod
     def _get_label(string):
+        if not string:
+            return ''
         wds = string.rsplit('=', maxsplit=1)
         if len(wds) > 1:
             return f'={wds[1]}'
