@@ -203,7 +203,8 @@ class Menu:  # pylint: disable=too-many-instance-attributes
         """
         idx = 0 if idx < 0 else len(self.lines) if idx > len(self.lines) else idx
         action, pre, on, off = '', ' ', '', ''
-        if idx == self.selected and idx < len(self.lines):
+        in_range = idx < len(self.lines)
+        if in_range and idx == self.selected:
             pre, on, off = '>',Term.reverse_video(), Term.normal_video()
         if idx < len(self.lines):
             self.max_line = max(2+len(self.lines[idx]), self.max_line)

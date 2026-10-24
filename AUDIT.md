@@ -9,13 +9,13 @@
 
 ## Bottom line
 
-Keep it as a **personal, opinionated tool**. The remaining defects are narrow. The temporary bookkeeping mounts still inherit the filesystem's default subvolume and are mounted writable even though the README calls them read-only, so a multi-device filesystem is still treated as one device per member. Everything else on the list is packaging and project hygiene. No open item can silently report a failed `btrfs` command as success.
+Keep it as a **personal, opinionated tool**. The remaining defects are narrow: a multi-device BTRFS filesystem is still reported as one device per member, and the packaging and project hygiene work is unfinished. No open item can silently report a failed `btrfs` command as success.
 
 ---
 
 ## What the project is, in evidence
 
-- 2,622 lines across five modules ([`main.py`](my_snaps/main.py) 1,349; [`my_restore.py`](my_snaps/my_restore.py) 521; [`InlineMenu.py`](my_snaps/InlineMenu.py) 436; [`bt_smart_balance.py`](my_snaps/bt_smart_balance.py) 208; [`MyUtils.py`](my_snaps/MyUtils.py) 108), one runtime dependency, MIT.
+- 2,702 lines across five modules ([`main.py`](my_snaps/main.py) 1,428; [`my_restore.py`](my_snaps/my_restore.py) 521; [`InlineMenu.py`](my_snaps/InlineMenu.py) 437; [`bt_smart_balance.py`](my_snaps/bt_smart_balance.py) 208; [`MyUtils.py`](my_snaps/MyUtils.py) 108), one runtime dependency, MIT.
 - A `pytest` suite in [`tests/`](tests) and one GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml#L1)) that runs `pylint` and `pytest` on Python 3.11 only.
 - No git tags, no changelog, no `SECURITY.md`, no issue templates, no man page.
 - [`pyproject.toml`](pyproject.toml#L7) declares 2.0.0, `requires-python = ">=3.11"`, and a dependency range of `console-window >= 2.0.0.10, <3`; nothing in the repository ties that version to a released commit.
@@ -39,9 +39,7 @@ Keep it as a **personal, opinionated tool**. The remaining defects are narrow. T
 
 ### P1 — correctness, safety, and portability
 
-1. **Temporary mounts inherit the default subvolume and are writable.** [`_ensure_tmp_mount()`](my_snaps/main.py#L904) runs a plain `mount dev dir` ([`line 918`](my_snaps/main.py#L918)): with no `-o subvolid=5`, a configured default subvolume makes the paths under `/tmp/.btrfs` wrong, and with no `-o ro` they are writable despite the README describing them as “read-only bookkeeping mounts” ([`README.md`](README.md#L68)).
-
-2. **Multi-device BTRFS filesystems appear as several devices.** [`_load_devs()`](my_snaps/main.py#L843) keys `self.devs` by block-device name ([`line 851`](my_snaps/main.py#L851)), so each member of a multi-device filesystem is mounted and scanned on its own and the device list, `df` header, and retention view are per-member rather than per-filesystem.
+1. **Multi-device BTRFS filesystems appear as several devices.** [`_load_devs()`](my_snaps/main.py#L854) keys `self.devs` by block-device name ([`line 862`](my_snaps/main.py#L862)), so each member of a multi-device filesystem gets its own read-only and writable mount, and the device list, `df` header, and retention view are per-member rather than per-filesystem.
 
 ### P2 — maintenance and discoverability
 
@@ -58,7 +56,7 @@ Popularity figures are as of 2026-10-24.
 
 | Tool | Snapshot model | Strengths | Cost / gap | Fit for this use case |
 |---|---|---|---|---|
-| **my-snaps** | label + replace-eldest, TUI, rename-based restore | Tiny, no daemon, transparent names, tailored `.efi-back` workaround, regression suite | Default-subvolume and multi-device mount discovery, no tags/changelog/man page, one maintainer | **Keep personal** |
+| **my-snaps** | label + replace-eldest, TUI, rename-based restore | Tiny, no daemon, transparent names, tailored `.efi-back` workaround, regression suite | Multi-device filesystems reported per member, no tags/changelog/man page, one maintainer | **Keep personal** |
 | **snapper** (+ snap-pac, grub-btrfs) | timeline, config retention, rollback | Mature, distro integration, boot-menu rollback (~1.2k stars) | Config/DBus/units, more moving parts | Best if you want point-and-click rollback |
 | **btrbk** | snapshot + send/receive + retention | Proven offsite backups, flexible retention (~2.2k stars) | Config-heavy, no TUI restore | Use for backups, not daily updates |
 | **btrfsmaintenance** | balance/scrub/trim jobs | Maintained, correct, systemd/cron integration (~1.1k stars) | Not a snapshot tool | Complement `bt-smart-balance` |
@@ -77,15 +75,15 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 **Keep it if:**
 - You are the primary user and your layout matches the assumptions (mounted `/.snapshots`, no dots in top-level names, labeled filesystems).
 - You value the simple model and the systemd-boot/pacman/dracut workaround.
-- You are willing to finish the two P1 items. Neither is a redesign, and the test suite makes each one cheap to verify.
+- You are willing to finish the remaining P1 item. It is not a redesign, and the test suite makes it cheap to verify.
 
 **Do not keep it as a public/general-purpose project unless you want to take on:**
 - Portability across unlabeled and multi-device BTRFS, and non-systemd-boot setups.
 - Tests, CI (ruff plus a wider Python matrix), tags, changelog, docs, and support.
-- The trust bar for a root tool that deletes subvolumes. Default-subvolume mount discovery is still that class of risk.
+- The trust bar for a root tool that deletes subvolumes. A multi-device filesystem mounted once per member is still that class of risk.
 
 **If you want less risk with less maintenance:**
-- Keep `my-snaps` for snapshots and `my-restore` for restores; finish P1 items 1–2 first.
+- Keep `my-snaps` for snapshots and `my-restore` for restores; finish P1 item 1 first.
 - Keep `bt-smart-balance`: it launches a bounded `-dusage` background balance and refuses to start a second one. Use **btrfsmaintenance** instead if you want a maintained job runner.
 - Use **btrbk** for offsite/retention and **snapper + grub-btrfs/snap-pac** only if you want boot-menu rollback.
 - Add a short “personal, unsupported, Linux-only, BTRFS-only” note to the README. It sets expectations and is honest about the project’s scope.
@@ -94,9 +92,8 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 
 ## Minimum fix list, in order
 
-1. **Fix temporary mounts.** Add `-o subvolid=5` (and `-o ro` if the README’s claim is the intent) in [`_ensure_tmp_mount()`](my_snaps/main.py#L904).
-2. **Deduplicate multi-device filesystems** in [`_load_devs()`](my_snaps/main.py#L843), so a filesystem is mounted and counted once rather than once per member.
-3. **Extend CI:** add a ruff step, run the matrix on 3.11–3.13, tag the release that matches 2.0.0, add a CHANGELOG, and update the stale GitHub description.
-4. **Add project hygiene:** `SECURITY.md`, issue templates, a man page, and PEP 639 license metadata.
+1. **Deduplicate multi-device filesystems** in [`_load_devs()`](my_snaps/main.py#L854), keying devices by filesystem UUID so a filesystem is mounted and counted once rather than once per member.
+2. **Extend CI:** add a ruff step, run the matrix on 3.11–3.13, tag the release that matches 2.0.0, add a CHANGELOG, and update the stale GitHub description.
+3. **Add project hygiene:** `SECURITY.md`, issue templates, a man page, and PEP 639 license metadata.
 
-The most valuable remaining work is item 1: the temporary bookkeeping mounts still inherit the filesystem’s default subvolume, and item 2 leaves multi-device setups misrepresented on screen.
+The most valuable remaining work is item 1: a multi-device filesystem is still mounted once per member, so the listing and the retention counts show it several times.

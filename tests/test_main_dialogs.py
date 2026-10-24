@@ -32,6 +32,9 @@ def make_btrfs(win):
     self.snap_targets = []
     self.snap_subvol = None
     self.dirty = False
+    # Mutating actions request the writable top-level mount; the dialog tests
+    # assert on the resulting commands, so they never mount anything.
+    self._ensure_rw_mount = lambda dev: f'/tmp/.btrfs/{dev}/rw'
 
     # Inline-confirmation state, normally created in BTRFS.__init__().
     self.confirm = InlineConfirmation()
@@ -144,7 +147,7 @@ def test_del_subvolume_confirm_y_deletes():
 
     assert self.confirm.active is False
     assert win.passthrough_mode is False
-    assert commands == [['btrfs', 'sub', 'del', '/tmp/.btrfs/dev0/@root']]
+    assert commands == [['btrfs', 'sub', 'del', '/tmp/.btrfs/dev0/rw/@root']]
     assert self.dirty is True
 
 

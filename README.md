@@ -65,10 +65,14 @@ See the Quick Start. After install, run some tests per "Initial and Regression T
 
 **Startup speed.** The first screen needs the BTRFS devices, their mounts and their subvolume trees. Devices
 are described with `lsblk` (read from sysfs/udev, no media probing) instead of `blkid`, which probes every
-block device and used to stall for seconds on an idle optical drive. Mounting the devices read-only bookkeeping
-mounts under `/tmp/.btrfs` plus one `btrfs sub list` per device then costs a few milliseconds, so the state is
-always read fresh — there is no cache to go stale. While the window sits idle it checks for hot-plugged devices
-and new mounts once a minute, and `f` forces the same refresh immediately.
+block device and used to stall for seconds on an idle optical drive. Each device then gets a read-only
+bookkeeping mount at `/tmp/.btrfs/{device}/ro` with `-o ro,subvolid=5`, so a configured default subvolume
+cannot shift the paths, plus one `btrfs sub list` per device. Creating or deleting a subvolume mounts the same
+top level writable at `/tmp/.btrfs/{device}/rw`, and only for that action, so a plain listing never mounts the
+filesystem writable. Both mounts are reused when they already carry the right options; a stale one left by an
+older version is unmounted and replaced. The state is always read fresh — there is no cache to go stale. While
+the window sits idle it checks for hot-plugged devices and new mounts once a minute, and `f` forces the same
+refresh immediately.
 
 **Non-interactive use**: `my-snaps` can be run non-interactively with these options:
 * `-p` or `--print` dumps your top-level subvolumes and their snapshots

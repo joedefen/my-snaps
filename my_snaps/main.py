@@ -73,6 +73,15 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
     # hot-plugged device or a new mount (see _poll_device_changes).
     IDLE_POLL_SECONDS = 60
 
+    # Options for the temporary bookkeeping mounts under `tmp_dir`.
+    #
+    # `subvolid=5` pins the filesystem's top level: without it a configured
+    # default subvolume would make every path from `btrfs sub list` point at
+    # the wrong place.  Discovery reads through a read-only mount; creating
+    # or deleting a subvolume needs a writable one, so it gets its own
+    # short-lived mount instead of making the bookkeeping mount writable.
+    MOUNT_OPTS = {'ro': 'ro,subvolid=5', 'rw': 'subvolid=5'}
+
     # Set only on systems without lsblk: `blkid` probes every medium and can
     # stall for seconds, so its result is cached for the process.  The normal
     # `lsblk` path is rescanned on every refresh (see _scan_block_devices).
@@ -641,7 +650,6 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
     def _create_snap(self, subvol_ns=None, suffix=None):
         if not subvol_ns:
             subvol_ns = self.rows[self.win.pick_pos].subvol_ns
-        dev_ns = self.devs[subvol_ns.dev]
 
         blocker = self._snap_blocker(subvol_ns)
         if blocker:
@@ -657,7 +665,10 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
                 on_confirm=lambda value: self._create_snap(subvol_ns, value))
             return None
 
-        snap_dir = f'{dev_ns.tmp_path}{self.snap_subvol.path}'
+        # The read-only bookkeeping mount cannot receive a snapshot, so ask
+        # for the writable twin only when a snapshot is actually created.
+        rw_dir = self._ensure_rw_mount(subvol_ns.dev)
+        snap_dir = f'{rw_dir}{self.snap_subvol.path}'
         snap_path = f'{snap_dir}{subvol_ns.path}{suffix}'
 
         cmd = ['btrfs', 'sub', 'snap', '-r', subvol_ns.mount, snap_path]
@@ -688,9 +699,9 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         if not ans.strip().lower().startswith('y'):
             return False
 
-        dev_ns = self.devs[subvol_ns.dev]
+        rw_dir = self._ensure_rw_mount(subvol_ns.dev)
         for ns in self.subvol_iter(subvol_ns, top_down=False):
-            snap_path = f'{dev_ns.tmp_path}{ns.path}'
+            snap_path = f'{rw_dir}{ns.path}'
             cmd = ['btrfs', 'sub', 'del', snap_path]
             out, err, code = self._slurp_command(cmd)
             if code:
@@ -884,7 +895,8 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
     def _init_dev_subvols(self, dev_ns, triples):
         """ (Re)build the subvolume tree of one device from the triples. """
-        dev_ns.tmp_path = os.path.join(self.tmp_dir, dev_ns.dev)
+        dev_ns.tmp_path = (getattr(dev_ns, 'ro_path', None)
+                           or self._mount_dir(dev_ns.dev, 'ro'))
         dev_ns.paths = {} # subvols keyed by relative path
         dev_ns.idents = {} # subvols keyed by ident
         dev_ns.subvols = []
@@ -901,25 +913,71 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
             dev_ns.paths[path] = child
             child.ago_str = ago_whence(child.path)
 
-    def _ensure_tmp_mount(self, dev):
-        """ Mount `dev` under the tmp dir unless it is already mounted there.
+    def _mount_dir(self, dev, mode):
+        """ The directory of the `mode` ('ro' or 'rw') tmp mount for `dev`. """
+        return os.path.join(self.tmp_dir, dev, mode)
+
+    @staticmethod
+    def _remember_tmp_mount(dev_ns, mode, path):
+        """ Record a successful tmp mount so `umount_tmps()` can undo it.
+
+        `tmp_path` stays the read-only discovery mount because every path
+        taken from `btrfs sub list` is resolved against it.
+        """
+        setattr(dev_ns, f'{mode}_path', path)
+        if mode == 'ro':
+            dev_ns.tmp_path = path
+
+    def _ensure_tmp_mount(self, dev, mode='ro'):
+        """ Mount `dev` under the tmp dir unless a suitable mount exists.
+
+        The mount is pinned with `subvolid=5`, so the paths returned by
+        `btrfs sub list` always line up with the filesystem top level, even
+        when a default subvolume is configured.  An existing mount is reused
+        only when it already has the requested options: a directory left
+        mounted by an older version, or by a previous run that did not exit
+        cleanly, is unmounted and replaced instead of trusted.
 
         Returns the mount dir, or None when the mount fails.
         """
         dev_ns = self.devs.get(dev)
         if dev_ns is None:
             return None
-        tmp_mount_dir = os.path.join(self.tmp_dir, dev)
-        if os.path.ismount(tmp_mount_dir):
-            dev_ns.tmp_path = tmp_mount_dir
-            return tmp_mount_dir
+        # Older versions mounted the device directly at `<tmp_dir>/<dev>`.
+        # Leaving that behind would nest the new mounts inside it, so drop it
+        # before choosing a path under the device's own directory.
+        legacy_dir = os.path.join(self.tmp_dir, dev)
+        if os.path.ismount(legacy_dir):
+            subprocess.run(['umount', legacy_dir], check=False)
+        tmp_mount_dir = self._mount_dir(dev, mode)
+        opts = self._mount_options(tmp_mount_dir)
+        if opts is not None:
+            tokens = set(opts.split(','))
+            if 'subvolid=5' in tokens and ('ro' in tokens) == (mode == 'ro'):
+                self._remember_tmp_mount(dev_ns, mode, tmp_mount_dir)
+                return tmp_mount_dir
+            subprocess.run(['umount', tmp_mount_dir], check=False)
         os.makedirs(tmp_mount_dir, exist_ok=True)
         dev_node = getattr(dev_ns, 'device_path', None) or self.dev_path(dev)
-        if subprocess.run(['mount', dev_node, tmp_mount_dir],
-                          check=False).returncode:
+        if subprocess.run(['mount', '-o', self.MOUNT_OPTS[mode],
+                           dev_node, tmp_mount_dir], check=False).returncode:
             return None
-        dev_ns.tmp_path = tmp_mount_dir
+        self._remember_tmp_mount(dev_ns, mode, tmp_mount_dir)
         return tmp_mount_dir
+
+    def _ensure_rw_mount(self, dev):
+        """ The writable top-level mount used to create or delete subvolumes.
+
+        Unlike discovery, this is only requested from the mutating actions,
+        so a pure listing (`-p`, `--DB`, the first screen) never gets a
+        writable mount of the filesystem.
+        """
+        rw_dir = self._ensure_tmp_mount(dev, 'rw')
+        if rw_dir is None:
+            raise BTRFSError(
+                f'cannot mount {dev} read-write under {self.tmp_dir}; '
+                'check dmesg, or mount it manually first')
+        return rw_dir
 
 
     def _mount_tmps(self):
@@ -930,7 +988,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
             self._progress(
                 'Reading BTRFS state. Be patient ... [3/5] '
                 f'mounting {dev} ({dev_ndx}/{dev_count})')
-            tmp_mount_dir = self._ensure_tmp_mount(dev)
+            tmp_mount_dir = self._ensure_tmp_mount(dev, 'ro')
             if tmp_mount_dir is None:
                 raise BTRFSError(
                     f'cannot mount {dev_ns.dev} under {self.tmp_dir} to read '
@@ -948,11 +1006,16 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
 
     def umount_tmps(self):
-        """ unmount each btrfs as needed """
+        """ Unmount every temporary mount, writable twins before their ro. """
         for ns in self.devs.values():
-            tmp_path = getattr(ns, 'tmp_path', None)
-            if tmp_path and os.path.ismount(tmp_path):
-                subprocess.run(['umount', tmp_path], check=False)
+            seen = []
+            for name in ('rw_path', 'ro_path', 'tmp_path'):
+                tmp_path = getattr(ns, name, None)
+                if tmp_path and tmp_path not in seen:
+                    seen.append(tmp_path)
+            for tmp_path in seen:
+                if os.path.ismount(tmp_path):
+                    subprocess.run(['umount', tmp_path], check=False)
 
     def _load_mounts(self):
         """ Read "/proc/mounts" afresh on every call.
@@ -980,6 +1043,22 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
             mat = re.search(r'subvol=(\S+)', opts)
             subvol = mat.group(1) if mat else None
         return dev, mount, fstype, subvolid, subvol
+
+    def _mount_options(self, pathname):
+        """ The option string of the mount at `pathname`, or None.
+
+        `/proc/mounts` escapes characters in the mount point (a space becomes
+        `\\040`), so compare the decoded field instead of the raw text.
+        """
+        wanted = os.path.normpath(pathname)
+        for line in self._load_mounts():
+            wds = re.split(r'\s+', line)
+            if len(wds) < 4:
+                continue
+            mount = wds[1].replace('\\040', ' ')
+            if os.path.normpath(mount) == wanted:
+                return wds[3]
+        return None
 
     def _all_mounts(self):
         """ Every "/proc/mounts" entry, as parse_mount_line() tuples. """

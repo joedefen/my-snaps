@@ -241,7 +241,8 @@ def test_init_dev_subvols_builds_tree():
     assert snap.depth == 1
     assert snap.parent == '2818'
     assert dev_ns.paths['/deb@snapshots'].children == [snap]
-    assert dev_ns.tmp_path == '/tmp/.btrfs/nvme0n1p2'
+    # Discovery paths are resolved against the read-only top-level mount.
+    assert dev_ns.tmp_path == '/tmp/.btrfs/nvme0n1p2/ro'
 
 
 ###############################################################################
