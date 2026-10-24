@@ -1,5 +1,7 @@
 [build-system]
-requires = ["flit_core>=3.4"]
+# 3.12 is the first flit_core release that understands the PEP 639 `license`
+# expression and `license-files` keys used in the `[project]` table below.
+requires = ["flit_core>=3.12"]
 build-backend = "flit_core.buildapi"
 
 [project]
@@ -10,7 +12,8 @@ authors = [
     {name = "Joe Defen", email = "joedef@duck.com"},
 ]
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     # Range, not an exact pin: the dependency published 31 releases in about
@@ -20,12 +23,13 @@ dependencies = [
     "console-window >= 2.0.0.10, <3",
 ]
 keywords = ["BTRFS", "snapshot", "restore", "balance", ]
+# No `License ::` classifier: PEP 639 deprecates it in favour of the SPDX
+# expression above, and flit_core 3.12 emits a deprecation warning for it.
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux"
 ]
 

@@ -18,7 +18,7 @@ Keep it as a **personal, opinionated tool**. The last correctness item is fixed:
 - 2,751 lines across five modules ([`main.py`](my_snaps/main.py) 1,477; [`my_restore.py`](my_snaps/my_restore.py) 521; [`InlineMenu.py`](my_snaps/InlineMenu.py) 437; [`bt_smart_balance.py`](my_snaps/bt_smart_balance.py) 208; [`MyUtils.py`](my_snaps/MyUtils.py) 108), one runtime dependency, MIT.
 - A `pytest` suite in [`tests/`](tests) and one GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml#L1)) that runs `pylint` and `pytest` on Python 3.11 only.
 - No git tags, no changelog, no `SECURITY.md`, no issue templates, no man page.
-- [`pyproject.toml`](pyproject.toml#L7) declares 2.0.0, `requires-python = ">=3.11"`, and a dependency range of `console-window >= 2.0.0.10, <3`; nothing in the repository ties that version to a released commit.
+- [`pyproject.toml`](pyproject.toml#L9) declares 2.0.0, `requires-python = ">=3.11"`, and a dependency range of `console-window >= 2.0.0.10, <3`; nothing in the repository ties that version to a released commit.
 - Three console scripts: `my-snaps`, `my-restore`, `bt-smart-balance`.
 
 ---
@@ -44,9 +44,9 @@ Keep it as a **personal, opinionated tool**. The last correctness item is fixed:
 ### P2 — maintenance and discoverability
 
 - [`.github/workflows/ci.yml`](.github/workflows/ci.yml#L1) runs `pylint` and `pytest` on Python 3.11 alone, with no ruff step. Tags, changelog, `SECURITY.md`, issue templates, and a man page are still missing.
-- The GitHub description (“Basic upgrade and BTRFS tools for Fedora and EOS”) no longer matches the PyPI summary (“Simple BTRFS Snapshot Tools”).
-- No tag or changelog anchors the 2.0.0 version in [`pyproject.toml`](pyproject.toml#L7); `runner` is a debug convenience, not a test harness.
-- License metadata is still the old `license = { text = "MIT" }` form ([`pyproject.toml`](pyproject.toml#L13)); it works, but modern PEP 639 metadata is cleaner.
+- ~~The GitHub description (“Basic upgrade and BTRFS tools for Fedora and EOS”) no longer matches the PyPI summary (“Simple BTRFS Snapshot Tools”).~~ **Done:** the repository description now matches the PyPI summary.
+- No tag or changelog anchors the 2.0.0 version in [`pyproject.toml`](pyproject.toml#L9); `runner` is a debug convenience, not a test harness.
+- ~~License metadata is still the old `license = { text = "MIT" }` form ([`pyproject.toml`](pyproject.toml#L15)); it works, but modern PEP 639 metadata is cleaner.~~ **Done 2026-10-24:** [`pyproject.toml`](pyproject.toml#L15) now uses the PEP 639 SPDX expression `license = "MIT"` plus `license-files = ["LICENSE"]`, and drops the deprecated `License ::` classifier. `flit_core>=3.12` in [`pyproject.toml`](pyproject.toml#L4) is required for those keys. Verified by building both artifacts: the wheel and sdist carry `Metadata-Version: 2.4`, `License-Expression: MIT`, `License-File: LICENSE`, and bundle the license at `*.dist-info/licenses/LICENSE`.
 
 ---
 
@@ -93,7 +93,7 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 ## Minimum fix list, in order
 
 1. ~~**Deduplicate multi-device filesystems** in [`_load_devs()`](my_snaps/main.py#L854), keying devices by filesystem UUID so a filesystem is mounted and counted once rather than once per member.~~ **Done:** [`_load_devs()`](my_snaps/main.py#L868) groups by UUID and aliases every member name; [`tests/test_device_scan.py`](tests/test_device_scan.py#L185) asserts a two-member filesystem produces one entry and one `df` call.
-2. **Extend CI:** add a ruff step, run the matrix on 3.11–3.13, tag the release that matches 2.0.0, add a CHANGELOG, and update the stale GitHub description.
-3. **Add project hygiene:** `SECURITY.md`, issue templates, a man page, and PEP 639 license metadata.
+2. **Extend CI:** add a ruff step, run the matrix on 3.11–3.13, tag the release that matches 2.0.0, and add a CHANGELOG. (The stale GitHub description is already updated.)
+3. **Add project hygiene:** `SECURITY.md`, issue templates, and a man page. (PEP 639 license metadata is done.)
 
 The remaining work is the P2 packaging/hygiene list; item 1 is implemented and covered by tests.
