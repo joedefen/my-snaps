@@ -101,6 +101,44 @@ def test_my_snaps_reexecs_after_a_real_action_is_parsed(monkeypatch):
     assert spy.calls == [("my_snaps.main", ["-p"])]
 
 
+def test_my_snaps_rejects_an_out_of_range_snap_limit(monkeypatch, capsys):
+    """ `-s 20` used to be clamped to 8, deleting snaps asked to be kept. """
+    spy = ReexecSpy()
+    monkeypatch.setattr(main_mod, "reexec_as_root", spy)
+
+    with pytest.raises(SystemExit) as exc:
+        main_mod.main(["-s", str(main_mod.SANITY_MAX_SNAPS + 1)])
+
+    assert exc.value.code == 2
+    assert "add-snap-max" in capsys.readouterr().err
+    assert spy.calls == []
+
+
+def test_my_snaps_rejects_a_zero_snap_limit(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main_mod.parse_args(["-s", "0"])
+
+    assert exc.value.code == 2
+    assert "between 1 and" in capsys.readouterr().err
+
+
+def test_my_snaps_honors_a_retention_above_the_default():
+    opts = main_mod.parse_args(["-s", "30"])
+
+    assert opts.add_snap_max == 30
+
+
+def test_my_snaps_keep_option_sets_the_tui_cap(capsys):
+    assert main_mod.parse_args([]).keep == main_mod.DEFAULT_KEEP_SNAPS
+    assert main_mod.parse_args(["-k", "14"]).keep == 14
+
+    with pytest.raises(SystemExit) as exc:
+        main_mod.parse_args(["-k", str(main_mod.SANITY_MAX_SNAPS + 1)])
+
+    assert exc.value.code == 2
+    assert "--keep" in capsys.readouterr().err
+
+
 # --- bt-smart-balance ------------------------------------------------------
 
 class FakeTool:

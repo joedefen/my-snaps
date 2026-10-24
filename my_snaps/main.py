@@ -30,6 +30,17 @@ from console_window import (ConsoleWindow, ConsoleWindowOpts,
 from my_snaps.MyUtils import (human, ago_whence, timestamp_str,
                               reexec_as_root, version_string)
 
+# `a` (add-all) keeps at most this many snapshots of one label per subvolume
+# in the TUI.  It is a convenience default, not a hard limit: `-k/--keep`
+# changes it, while `-s/--add-snap-max` states an exact retention for
+# non-interactive runs.
+DEFAULT_KEEP_SNAPS = 8
+
+# A typo guard for `-s`/`-k`.  Values above it are refused outright, never
+# clamped: `-s` deletes as well as creates, so clamping it would silently
+# remove snapshots the operator asked to keep.
+SANITY_MAX_SNAPS = 1000
+
 ##############################################################################
 
 class BTRFSError(RuntimeError):
@@ -63,6 +74,7 @@ class BTRFS:
         self.snap_subvol = None
         self.DB = opts.DB
         self.add_limit = opts.add_snap_max
+        self.keep = opts.keep  # cap for `a` when no `-s` limit applies
         self.label = None   # one label of current interest
         self.help_mode = False
         self.win = None
@@ -106,8 +118,14 @@ class BTRFS:
 
 
         if self.add_limit > 0:
-            if opts.label:
-                self.label = '=' + opts.label.replace('=', '')
+            # `-s` without `-L` manages the unlabeled snapshots.  Their
+            # `label_groups` entries are keyed by '', so storing None here
+            # would select no group and the old unlabeled snaps would never
+            # be removed.
+            self.label = self._normalize_label(opts.label)
+            if self.add_limit > DEFAULT_KEEP_SNAPS:
+                print(f'NOTE: keeping {self.add_limit} snapshots per '
+                      'subvolume/label', file=sys.stderr)
             success = self._replace_eldest_snaps()
             print("OK" if success else "FAIL", f'add_snap_limit={self.add_limit}')
             if success and opts.print:
@@ -501,7 +519,7 @@ class BTRFS:
         self._begin_confirm(
             'Set snap suffix, then ENTER or ESC',
             mode='text', seed=self._cur_snap_suffix(),
-            labels=' '.join(sorted(self.label_set)),
+            labels=' '.join(sorted(x for x in self.label_set if x)),
             action_type='replace',
             on_confirm=lambda suffix: self._suffix_entered(suffix, just_add))
         return None
@@ -556,19 +574,27 @@ class BTRFS:
         self._do_replace_eldest_snaps(suffix, just_add=just_add)
 
     def _do_replace_eldest_snaps(self, suffix, just_add=False, targets=None):
-        """ The actual replace/add work, given an already accepted suffix. """
+        """ The actual replace/add work, given an already accepted suffix.
+
+        `add` (`just_add`) keeps at most `self.keep` snaps of the label per
+        subvolume, or `self.add_limit` when `-s` stated an exact retention.
+        `replace` keeps as many as the largest family already present, so it
+        never trims.
+        """
         if targets is None:
             targets = self.snap_targets
+        label = self.label or ''
+        keep = self.add_limit or self.keep
         success = None
-        counts = [len(subvol_ns.label_groups.get(self.label, []))
+        counts = [len(subvol_ns.label_groups.get(label, []))
                   for subvol_ns in targets]
         max_cnt = self.add_limit if self.add_limit else max(counts, default=0)
 
         for subvol_ns in targets:
-            like_snaps = subvol_ns.label_groups.get(self.label, [])
+            like_snaps = subvol_ns.label_groups.get(label, [])
             this_cnt = len(like_snaps)
             if just_add:
-                discard = max(0, this_cnt-8+1)
+                discard = max(0, this_cnt-keep+1)
             else:
                 discard = max(0, this_cnt-max_cnt+1)
 
@@ -968,6 +994,17 @@ class BTRFS:
                 'mount the snapshot subvolume there before running my-snaps')
 
     @staticmethod
+    def _normalize_label(label):
+        """ Canonical label: '' when unlabeled, otherwise '=Name'.
+
+        `label_groups` uses '' for snapshots without a label, so an absent
+        `-L` must become '' rather than None to find (and prune) them.
+        """
+        if not label:
+            return ''
+        return '=' + label.strip('=')
+
+    @staticmethod
     def _get_label(string):
         if not string:
             return ''
@@ -1185,7 +1222,11 @@ def parse_args(argv=None):
     parser.add_argument('--version', action='version',
             version=f'%(prog)s {version_string()}')
     parser.add_argument('-s', '--add-snap-max', type=int, default=None,
-            help='add snapshots limited to value per subvol [1<=val<=8]')
+            help='add snapshots kept per subvol/label, exactly N '
+                 f'[1<=N<={SANITY_MAX_SNAPS}]')
+    parser.add_argument('-k', '--keep', type=int, default=DEFAULT_KEEP_SNAPS,
+            help='cap for a (add-all) in the TUI '
+                 f'[1<=N<={SANITY_MAX_SNAPS}] (default: %(default)s)')
     parser.add_argument('-L', '--label', type=str,
             help='add given label to -s snapshots')
     parser.add_argument('-p', '--print', action="store_true",
@@ -1205,8 +1246,15 @@ def parse_args(argv=None):
         opts.print = False
     if opts.add_snap_max is None:
         opts.add_snap_max = 0
-    if opts.add_snap_max > 0:
-        opts.add_snap_max = min(opts.add_snap_max, 8)
+    elif not 1 <= opts.add_snap_max <= SANITY_MAX_SNAPS:
+        # A clamp used to turn `-s 20` into 8, which deletes snapshots the
+        # operator asked to keep.  Refuse the typo instead, before the root
+        # re-exec and before anything is touched.
+        parser.error('argument -s/--add-snap-max: must be between 1 and '
+                     f'{SANITY_MAX_SNAPS}, got {opts.add_snap_max}')
+    if not 1 <= opts.keep <= SANITY_MAX_SNAPS:
+        parser.error('argument -k/--keep: must be between 1 and '
+                     f'{SANITY_MAX_SNAPS}, got {opts.keep}')
     return opts
 
 def main(argv=None):

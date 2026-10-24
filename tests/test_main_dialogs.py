@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 from console_window import InlineConfirmation
 
-from my_snaps.main import BTRFS
+from my_snaps.main import BTRFS, DEFAULT_KEEP_SNAPS
 
 
 def make_btrfs(win):
@@ -28,6 +28,7 @@ def make_btrfs(win):
     self.label = None
     self.label_set = set()
     self.add_limit = 0
+    self.keep = DEFAULT_KEEP_SNAPS
     self.snap_targets = []
     self.snap_subvol = None
     self.dirty = False
@@ -671,6 +672,100 @@ def test_labeled_action_on_stale_snap_is_refused():
         'Cannot replace snaps of /kub@home '
         '(not a mounted top-level subvolume)', 4.0)]
 
+
+###############################################################################
+# Retention: `a` keeps a documented number, `r` keeps the largest family
+###############################################################################
+
+def make_labeled_family(count, label='=Daily'):
+    """One subvolume holding `count` snapshots of the same label."""
+    subvol = make_subvol('/@root')
+    snaps = [make_subvol(f'/@snapshots/root.2026-10-{idx+1:02d}-073714{label}')
+             for idx in range(count)]
+    for snap in snaps:
+        snap.snap_of = subvol
+        snap.snap_label = label
+    subvol.snaps = snaps
+    subvol.label_groups = {label: snaps}
+
+    self = make_btrfs(FakeWin())
+    self.snap_targets = [subvol]
+    return self, subvol
+
+
+def capture_discards(self):
+    discards = []
+    self._replace_eldest_snaps_of_subvol = (
+        lambda sv, like, suffix=None, discard=1:
+            discards.append(discard) or True)
+    return discards
+
+
+def test_add_keeps_the_documented_default_per_label():
+    self, _subvol = make_labeled_family(DEFAULT_KEEP_SNAPS + 1)
+    discards = capture_discards(self)
+
+    self.label = '=Daily'
+    assert self._do_replace_eldest_snaps('.x=Daily', just_add=True) is True
+
+    assert discards == [2]  # 9 old snaps, keep 8 after the new one
+    assert self.label is None
+
+
+def test_add_honors_an_explicit_keep():
+    self, _subvol = make_labeled_family(5)
+    discards = capture_discards(self)
+    self.keep = 3
+
+    self.label = '=Daily'
+    self._do_replace_eldest_snaps('.x=Daily', just_add=True)
+
+    assert discards == [3]  # 5 - 3 + 1
+
+
+def test_add_honors_add_limit_when_one_is_set():
+    self, _subvol = make_labeled_family(5)
+    discards = capture_discards(self)
+    self.add_limit = 2
+
+    self.label = '=Daily'
+    self._do_replace_eldest_snaps('.x=Daily', just_add=True)
+
+    assert discards == [4]  # 5 - 2 + 1
+
+
+def test_replace_all_is_not_capped_by_the_add_keep():
+    self, _subvol = make_labeled_family(9)
+    discards = capture_discards(self)
+
+    self.label = '=Daily'
+    self._do_replace_eldest_snaps('.x=Daily')
+
+    assert discards == [1]  # replace keeps the largest family as-is
+
+
+def test_normalize_label_maps_absent_and_bare_names():
+    assert BTRFS._normalize_label(None) == ''
+    assert BTRFS._normalize_label('') == ''
+    assert BTRFS._normalize_label('Daily') == '=Daily'
+    assert BTRFS._normalize_label('=Daily') == '=Daily'
+
+
+def test_unlabeled_s_targets_the_empty_label(monkeypatch):
+    """`-s` without `-L` must prune label_groups[''], not look for None."""
+    seen = []
+    monkeypatch.setattr(BTRFS, '_refresh_if_dirty', lambda self: None)
+    monkeypatch.setattr(BTRFS, 'umount_tmps', lambda self: None)
+    monkeypatch.setattr(BTRFS, '_replace_eldest_snaps',
+                        lambda self: seen.append(self.label) or True)
+    opts = SimpleNamespace(DB=False, cron=None, add_snap_max=2,
+                           keep=DEFAULT_KEEP_SNAPS, label=None, print=False)
+
+    with pytest.raises(SystemExit) as exc:
+        BTRFS(opts)
+
+    assert exc.value.code == 0
+    assert seen == ['']
 
 ###############################################################################
 # Disk usage: ask before the slow "du" pass

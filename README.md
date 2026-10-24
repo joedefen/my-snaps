@@ -51,7 +51,8 @@ See the Quick Start. After install, run some tests per "Initial and Regression T
 * In the header, the BTRFS partitions are shown with `df -h` info (showing Size, Used, Avail, Use%, and Mounted on); run df separately to remind you of the fields when needed.
 * On your very first run, highlight each subvolume for which you wish snapshots, and press `s` to create one (use one of your standard labels)
 * `r` replaces your eldest snapshot of the same label for each top-level subvolume that has any snapshots.
-* `a` replaces a snapshot of the same label for each top-level subvolume that has any snapshots.
+* `a` adds a snapshot of the same label for each top-level subvolume that has any snapshots, keeping at most 8 of that label per subvolume (the eldest are removed as each new one is added).
+  * the 8 is the default cap, not a hard limit: run `my-snaps -k{N}` to keep `{N}` per label, and `-s{N}` when you want an exact non-interactive retention.
   * to describe snapshots, add a short label when prompted (e.g., "=Update").
 * When the cursor is on a labeled snapshot (e.g., `--> deb@root.2026-10-23-073714=Daily`), `r` and `a` stay with that label: they ask `Replace a =Daily snap for 3 subvols?` or `Add a =Daily snap for 3 subvols?` and need only `y` or ESC.
   * Only mounted top-level subvolumes are counted and changed, the same set the cron job maintains, so stale snapshots from an unmounted install (e.g., `/kub@home` with its 38-week-old `=Daily`) are left alone; highlighting such a stale snapshot refuses the action.
@@ -71,8 +72,10 @@ and new mounts once a minute, and `f` forces the same refresh immediately.
 
 **Non-interactive use**: `my-snaps` can be run non-interactively with these options:
 * `-p` or `--print` dumps your top-level subvolumes and their snapshots
-* `-s{N}` or `--add-snap-max={N}` adds a new snapshot for each subvolume with snapshots and removes the eldest until there are no more than `{N}`.
-* `-l{label}` or `--label={label}` to set the label of the snapshots involved.
+* `-s{N}` or `--add-snap-max={N}` adds a new snapshot for each subvolume with snapshots and removes the eldest until there are no more than `{N}` (`1 <= N <= 1000`).
+  * out-of-range values are refused instead of clamped: a clamp would delete snapshots you asked to keep. Values above 8 print a note because they exceed the tool's default retention.
+* `-L{label}` or `--label={label}` sets the label of the snapshots involved. Without it, `-s` manages the **unlabeled** snapshots (those without a `=label` suffix), so their old ones are replaced instead of accumulating.
+* `-k{N}` or `--keep={N}` sets the number of snapshots `a` retains per label in the TUI (default 8; `1 <= N <= 1000`).
 * `--cron={period}` adds an `anacron` job to add snapshots at the given period with appropriate defaulted `-s` and `-L` or you can specify those. Notes:
   * `anacron` must be installed ... it is usually bundled in of a `cron` package such as `cronie`.
   * jobs are stored in `/etc/cron.{period}/{period}.snaps`. To change jobs settings, edit those or just reinstall with new options.
