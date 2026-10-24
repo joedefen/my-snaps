@@ -174,7 +174,15 @@ Description = Backing up post /efi...
 When = PostTransaction
 Exec = /usr/bin/bash -c 'rsync -a -H --del /efi/ /.efi-back/'
 ```
-Then, when replacing the root subvolume, /efi will be restored from its /.efi-back if that directory exists.
+Then, when replacing the root subvolume, /efi is mirrored from its `.efi-back`
+if that directory exists:
+```
+rsync -a -H --delete "<snapshot>/.efi-back/" "/efi/"
+```
+The mirror is authoritative: entries that are not in the backup are removed
+from /efi, so the restored root's kernels and boot entries are exactly what the
+ESP advertises. It only runs when /efi is the mounted ESP and the backup is not
+empty, so an incomplete snapshot cannot empty the boot partition.
 
 -- 
 

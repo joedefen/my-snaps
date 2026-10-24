@@ -39,30 +39,30 @@ That last point matters for the audit: the bugs below are in the code you are ru
 
 ### P0 — can silently break the core promise
 
-1. **`_slurp_command()` reports every failed `btrfs` command as success.**
+1. ✅ **`_slurp_command()` reports every failed `btrfs` command as success.**
    [`_slurp_command()`](my_snaps/main.py#L355) calls `process.wait()` and then applies [`os.WEXITSTATUS(status)`](my_snaps/main.py#L363). `Popen.wait()` already returns an exit code (0–255), so `os.WEXITSTATUS(1) == 0`. I verified with `true`, `false`, and `sh -c "exit 42"`: all three returned code `0`.
    Consequences: [`_create_snap()`](my_snaps/main.py#L293) treats a failed snapshot as success and marks the view dirty; [`_del_subvolume()`](my_snaps/main.py#L329) treats a failed deletion as success, removes the entry from the in-memory list, and lets retention drift. That is the worst possible failure mode for a pre-update snapshot tool.
    Fix: use `process.communicate()` once and return `process.returncode` directly.
 
-2. **`bt-smart-balance` never actually balances.**
+2. ✅ **`bt-smart-balance` never actually balances.**
    [`balance_filesystem()`](my_snaps/bt_smart_balance.py#L55) builds the command with [`self.opt`](my_snaps/bt_smart_balance.py#L58), which does not exist; I reproduced `AttributeError: 'BtSmartBalance' object has no attribute 'opt'`. Even after correcting that, the next line overwrites `cmd` with only [` --bg {mount}`](my_snaps/bt_smart_balance.py#L59), so it would try to execute `--bg /`, not `btrfs balance start`. The `-dusage` value is discarded either way.
    Impact: the advertised balancing feature has never worked; a naive fix could launch an unbounded full balance on `/`.
 
-3. **`my-restore` crashes on unlabeled filesystems.**
+3. ✅ **`my-restore` crashes on unlabeled filesystems.**
    [`select_mount()`](my_snaps/my_restore.py#L91) only matches quoted labels in [`label = mat.group(1)`](my_snaps/my_restore.py#L99). `btrfs filesystem show` prints `Label: none` for unlabeled filesystems, so `label` is unbound and the tool dies with `UnboundLocalError`. I reproduced this. For later filesystems, the previous label leaks instead. Since unlabeled BTRFS is common, this alone explains much of the lack of adoption.
 
-4. **The mount-selection command is destructive and wrong.**
+4. ✅ **The mount-selection command is destructive and wrong.**
    [`umount /dev`](my_snaps/my_restore.py#L109) should be `umount /mnt`. As root, unmounting `/dev` can tear down devtmpfs or fail and short-circuit the `&&`, leaving the requested filesystem unmounted. Then [`select_restores()`](my_snaps/my_restore.py#L193) does `os.chdir('/mnt')` and operates on whatever is there. This is a safety-critical path, and it is executed with `force=True` even in dry-run.
 
-5. **`my-restore --dry-run` is not dry.**
+5. ✅ **`my-restore --dry-run` is not dry.**
    [`get_state()`](my_snaps/my_restore.py#L141) directly runs `btrfs sub del` on any top-level `*ToDel` subvolume at [`continue`](my_snaps/my_restore.py#L169) with no confirmation and no dry-run check. The README itself says to delay deletion until a restore passes muster. The mount selection is also forced. A user invoking `-n` to inspect state can still delete data and change mounts.
 
-6. **Restoring a different snapshot after a revert fails on a running system.**
+6. ✅ **Restoring a different snapshot after a revert fails on a running system.**
    In the revert branch, [`prep = f'btrfs sub del "{subvol}" && '`](my_snaps/my_restore.py#L226) tries to delete the currently mounted root/home subvolume. `btrfs sub del` will fail with “device or resource busy,” and `&&` prevents the snapshot creation. The recovery loop described in [`README.md`](README.md#L105) therefore does not work as written on the installed system.
 
 ### P1 — correctness, safety, and portability
 
-7. **`rsync -a -del` does not delete stale `/efi` entries.** [`sync_cmd()`](my_snaps/my_restore.py#L198) generates `rsync -a -del -H` at [`line 201`](my_snaps/my_restore.py#L201); the intended option is `--delete`. I verified that an extra stale file remains in the destination with `-del`, so the `.efi-back` mirroring is incomplete.
+7. ✅ **`rsync -a -del` does not delete stale `/efi` entries.** [`sync_cmd()`](my_snaps/my_restore.py#L198) generates `rsync -a -del -H` at [`line 201`](my_snaps/my_restore.py#L201); the intended option is `--delete`. I verified that an extra stale file remains in the destination with `-del`, so the `.efi-back` mirroring is incomplete. **Fixed:** [`efi_sync_cmd()`](my_snaps/my_restore.py#L294) emits `rsync -a -H --delete`, refuses an empty `.efi-back` or a `/efi` that is not a mount point, and runs before the rename to `=Reverted`; tests in [`tests/test_restore_efi_sync.py`](tests/test_restore_efi_sync.py).
 8. **Python metadata disagrees with itself.** [`requires-python`](pyproject.toml#L14) says `>=3.8`; the README says Python 3.11+; the pinned `console-window` 2.0.0.10 requires `>=3.10`. On 3.8/3.9 the local install cannot resolve its dependency. Also prefer `console-window>=2.0.0.10,<3` over an exact pin: the dependency had 31 releases and five uploads within roughly 26 hours.
 9. **Root re-exec happens before argument parsing.** `my-snaps --help`, `my-restore -n`, and `bt-smart-balance --help` all invoke sudo before argparse. That is poor UX and makes `pip --user` installs fragile. Parse arguments first; only re-exec for actions that actually need root.
 10. **Non-interactive error paths crash instead of reporting.** [`_create_snap()`](my_snaps/main.py#L293) and [`_del_subvolume()`](my_snaps/main.py#L329) call `self.win.alert` on failure, but `self.win` is `None` in `-s`/cron mode. A real `btrfs` error is replaced by `AttributeError: 'NoneType' object has no attribute 'alert'`.

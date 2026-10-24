@@ -291,6 +291,38 @@ class BtrfsRestore:
             return ''
         return f'nothing is mounted on {MNT}'
 
+    def efi_sync_cmd(self, subvol, whence):
+        """ Mirror the snapshot's backup of the ESP into /efi.
+
+        Deletion is the point: /efi must end up matching the restored root.
+        The additive copy left behind by the mistyped `-del` -- which rsync
+        parses as `-d -e l`, setting the remote shell to the nonexistent
+        command `l` -- silently kept kernels and boot entries that the
+        restored root no longer had.
+
+        Both guards exist because `--delete` makes /efi authoritative: an
+        empty backup would empty the ESP, and a /efi that is not the mounted
+        ESP would delete files belonging to the running (or live) system.
+        """
+        efi_back = os.path.join(whence, '.efi-back')
+        if subvol != self.root_subvol or not os.path.isdir(efi_back):
+            return ''
+        try:
+            entries = os.listdir(efi_back)
+        except OSError as exce:
+            print(f'WARNING: cannot read {efi_back!r}: {exce}; '
+                  'not mirroring /efi', file=sys.stderr)
+            return ''
+        if not entries:
+            print(f'WARNING: {efi_back!r} is empty; not mirroring /efi',
+                  file=sys.stderr)
+            return ''
+        if not os.path.ismount('/efi'):
+            print('WARNING: /efi is not a mount point; not mirroring '
+                  '(would delete the wrong tree)', file=sys.stderr)
+            return ''
+        return f'rsync -a -H --delete "{efi_back}/" "/efi/" && '
+
     def select_restores(self, todo='a'):
         """ TBD """
         def next_key(key):
@@ -302,12 +334,6 @@ class BtrfsRestore:
 
         def advance(key, lead):
             return next_key(key), ' '*len(lead)
-
-        def sync_cmd(subvol, whence):
-            sync, efi_back = '', os.path.join(whence, '.efi-back')
-            if os.path.isdir(efi_back) and subvol == self.root_subvol:
-                sync = f'rsync -a -del -H "{efi_back}/" "/efi/" && '
-            return sync
 
         def freed_name_cmd(subvol):
             """ Free `subvol`'s name so a new subvolume can take it.
@@ -346,7 +372,7 @@ class BtrfsRestore:
                 # subvolume is the copy made by the earlier revert. Freeing
                 # its name is what makes `revert` and `restore` symmetric.
                 prep = freed_name_cmd(subvol)
-                run = sync_cmd(subvol, ns.revert) + prep
+                run = self.efi_sync_cmd(subvol, ns.revert) + prep
                 run += f'mv "{ns.revert}" "{subvol}"'
                 cmds[key] = [f'{lead}: revert {ns.revert}', run]
                 key, lead = advance(key, lead)
@@ -361,11 +387,14 @@ class BtrfsRestore:
 
             for snap in ns.snaps:
                 snap_base = os.path.basename(snap)
-                sync = sync_cmd(subvol, snap)
+                # Mirror the ESP *before* `prep` renames the current
+                # subvolume: an rsync failure must not leave the system with
+                # `{subvol}` moved aside and no replacement created.
+                sync = self.efi_sync_cmd(subvol, snap)
 
                 cmds[key] = [
                     f'{lead}: restore {snap_base} {ago_whence(snap_base)}', # prompt
-                    f'{prep}{sync}btrfs sub snap "{snap}" "{subvol}"', # actual cmd
+                    f'{sync}{prep}btrfs sub snap "{snap}" "{subvol}"', # actual cmd
                 ]
                 key, lead = advance(key, lead)
         # `*ToDel` subvolumes are leftovers of a revert that replaced a mounted
