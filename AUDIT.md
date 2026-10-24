@@ -37,7 +37,7 @@ That last point matters for the audit: the bugs below are in the code you are ru
 
 ## Defects found
 
-> **Status as of 2026-10-24:** ✅ = fixed in the working tree and covered by tests; ⏳ = partially done; unmarked = still open. Fixed: defects 1–8 and minimum-fix items 1–7 and 11. Still open: minimum-fix items 8–10 and 12 (⏳), plus the P1 items other than 7–8.
+> **Status as of 2026-10-24:** ✅ = fixed in the working tree and covered by tests; ⏳ = partially done; unmarked = still open. Fixed: defects 1–9 and minimum-fix items 1–8 and 11. Still open: minimum-fix items 9–10 and 12 (⏳), plus the P1 items other than 7–9.
 
 ### P0 — can silently break the core promise (all fixed ✅)
 
@@ -66,7 +66,8 @@ That last point matters for the audit: the bugs below are in the code you are ru
 
 7. ✅ **`rsync -a -del` does not delete stale `/efi` entries.** [`sync_cmd()`](my_snaps/my_restore.py#L198) generates `rsync -a -del -H` at [`line 201`](my_snaps/my_restore.py#L201); the intended option is `--delete`. I verified that an extra stale file remains in the destination with `-del`, so the `.efi-back` mirroring is incomplete. **Fixed:** [`efi_sync_cmd()`](my_snaps/my_restore.py#L294) emits `rsync -a -H --delete`, refuses an empty `.efi-back` or a `/efi` that is not a mount point, and runs before the rename to `=Reverted`; tests in [`tests/test_restore_efi_sync.py`](tests/test_restore_efi_sync.py).
 8. ✅ **Python metadata disagrees with itself.** [`requires-python`](pyproject.toml#L14) says `>=3.8`; the README says Python 3.11+; the pinned `console-window` 2.0.0.10 requires `>=3.10`. On 3.8/3.9 the local install cannot resolve its dependency. Also prefer `console-window>=2.0.0.10,<3` over an exact pin: the dependency had 31 releases and five uploads within roughly 26 hours. **Fixed:** 3.11 is the declared baseline (`requires-python = ">=3.11"`, classifiers for 3.11–3.13) and the dependency is a range (`console-window >= 2.0.0.10, <3`).
-9. **Root re-exec happens before argument parsing.** `my-snaps --help`, `my-restore -n`, and `bt-smart-balance --help` all invoke sudo before argparse. That is poor UX and makes `pip --user` installs fragile. Parse arguments first; only re-exec for actions that actually need root.
+9. ✅ **Root re-exec happens before argument parsing.** `my-snaps --help`, `my-restore -n`, and `bt-smart-balance --help` all invoke sudo before argparse. That is poor UX and makes `pip --user` installs fragile. Parse arguments first; only re-exec for actions that actually need root.
+   **Fixed:** every entry point now exposes [`parse_args()`](my_snaps/main.py#L1025) and calls [`reexec_as_root()`](my_snaps/MyUtils.py#L62) only afterwards. `--help`/`--version` and invalid usage therefore never prompt; `my-restore -n` stays unprivileged; `bt-smart-balance` re-execs only for `-i`, because [`_run()`](my_snaps/bt_smart_balance.py#L26) already prefixes individual `btrfs` commands with `sudo`. Covered by [`tests/test_entrypoints.py`](tests/test_entrypoints.py).
 10. **Non-interactive error paths crash instead of reporting.** [`_create_snap()`](my_snaps/main.py#L293) and [`_del_subvolume()`](my_snaps/main.py#L329) call `self.win.alert` on failure, but `self.win` is `None` in `-s`/cron mode. A real `btrfs` error is replaced by `AttributeError: 'NoneType' object has no attribute 'alert'`.
 11. **`process.wait()` before `communicate()` can deadlock.** If `btrfs sub list` or `df` produces more than the pipe buffer, the child blocks writing while the parent waits. With many snapshots this is plausible.
 12. **Shell construction with `shell=True` and unquoted paths.** [`_slurp_command()`](my_snaps/main.py#L355) runs as root through a shell. The README only forbids `.` and `/` in subvolume names, not spaces or shell metacharacters. Prefer argv lists and `subprocess.run([...])`; reserve shell only for fixed strings.
@@ -137,7 +138,7 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 5. ✅ **Make dry-run dry:** skip `*ToDel` deletion and forced mounts when `self.dry_run` is set.
 6. ✅ **Fix `rsync -a -del` → `rsync -a --delete`**. Done as `rsync -a -H --delete`, with guards that refuse an empty `.efi-back` or an unmounted `/efi` ([`efi_sync_cmd()`](my_snaps/my_restore.py#L294)); see defect 7.
 7. ✅ **Bump the version and align metadata:** `requires-python = ">=3.10"` (or 3.11 per README), `console-window>=2.0.0.10,<3`. Done: 3.11 is the baseline (`requires-python = ">=3.11"`, classifiers 3.11–3.13) and the dependency is the requested range; the version is already `2.0.0`.
-8. **Parse args before sudo**, and add `--version`.
+8. ✅ **Parse args before sudo**, and add `--version`. Done: all three entry points parse first, `--version` is available everywhere, and escalation is centralized in [`reexec_as_root()`](my_snaps/MyUtils.py#L62); `my-restore -n` and a normal `bt-smart-balance` check never re-exec.
 9. **Guard `self.win`** in non-interactive paths; print errors to stderr and exit nonzero.
 10. **Replace `assert` with explicit errors**, quote paths or use argv lists, and add `subvolid=5` to temporary mounts.
 11. ✅ **Add a pytest suite with a fake `btrfs` executable in `PATH`** covering: nonzero exit propagation, `Label: none` parsing, restore command generation, retention counts, dry-run behavior, and the `*ToDel` policy. Done: 113 tests in [`tests/`](tests), including fake `btrfs`/`lsblk`/`rsync` executables and the `/efi` mirror guards.

@@ -26,7 +26,8 @@ import curses as cs
 from types import SimpleNamespace
 from console_window import (ConsoleWindow, ConsoleWindowOpts,
                             InlineConfirmation, OptionSpinner)
-from my_snaps.MyUtils import human, ago_whence, timestamp_str
+from my_snaps.MyUtils import (human, ago_whence, timestamp_str,
+                              reexec_as_root, version_string)
 
 ##############################################################################
 
@@ -1021,25 +1022,17 @@ class BTRFS:
 
 btrfs = None
 
-def rerun_module_as_root(module_name):
-    """ rerun using the module name """
-    if os.geteuid() != 0: # Re-run the script with sudo
-        os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        vp = ['sudo', sys.executable, '-m', module_name] + sys.argv[1:]
-        os.execvp('sudo', vp)
+def parse_args(argv=None):
+    """ Parse the command line before anything asks for root.
 
-def main():
-    """ TBD """
-    global btrfs
+    `--help`/`--version` and usage errors therefore never trigger sudo, which
+    keeps `pip --user` installations usable and avoids a password prompt for
+    a command that does no work.
+    """
     import argparse
-    rerun_module_as_root('my_snaps.main')
-    if os.geteuid() != 0: # Re-run the script with sudo
-        module_name = 'my_snaps.main'
-        os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        vp = ['sudo', sys.executable, '-m', module_name] + sys.argv[1:]
-        os.execvp('sudo', vp)
-
     parser = argparse.ArgumentParser()
+    parser.add_argument('--version', action='version',
+            version=f'%(prog)s {version_string()}')
     parser.add_argument('-s', '--add-snap-max', type=int, default=None,
             help='add snapshots limited to value per subvol [1<=val<=8]')
     parser.add_argument('-L', '--label', type=str,
@@ -1051,7 +1044,7 @@ def main():
             help='install a periodic snapshot anacron job')
     parser.add_argument('--DB', action="store_true",
             help='add some debugging output')
-    opts = parser.parse_args()
+    opts = parser.parse_args(argv)
     if opts.cron:
         if not opts.label:
             opts.label = '=' + opts.cron.capitalize()
@@ -1063,6 +1056,16 @@ def main():
         opts.add_snap_max = 0
     if opts.add_snap_max > 0:
         opts.add_snap_max = min(opts.add_snap_max, 8)
+    return opts
+
+def main(argv=None):
+    """ TBD """
+    global btrfs
+    opts = parse_args(argv)
+    # Every action that survives parsing (window, -p, -s, --cron) mounts
+    # BTRFS devices under /tmp or writes /etc, so this is the first point at
+    # which root is genuinely required.
+    reexec_as_root('my_snaps.main', argv)
 
     btrfs = BTRFS(opts)
     btrfs.umount_tmps()

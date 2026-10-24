@@ -5,7 +5,9 @@ shared utilities fo the my-snap tools
 """
 # pylint: disable=broad-exception-caught,invalid-name
 
+import os
 import re
+import sys
 import time
 from datetime import datetime
 
@@ -46,6 +48,47 @@ def ago_str(delta_secs, signed=False):
     rv += f'{vals[1]}{units[uidx]}' if vals[1] else ''
     rv += f'{vals[0]:d}{units[uidx-1]}'
     return rv
+
+##############################################################################
+def version_string():
+    """ Return the installed my-snaps version, or 'unknown' from a bare tree. """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        return version('my-snaps')
+    except (ImportError, PackageNotFoundError):
+        return 'unknown'
+
+##############################################################################
+def reexec_as_root(module_name, argv=None):
+    """ Re-run this command under sudo, but only when root is truly needed.
+
+    Call this *after* argument parsing.  `--help` and `--version` then exit
+    before any password prompt, invalid usage is reported without sudo, and
+    read-only/dry-run modes can deliberately stay unprivileged.  It returns
+    when the process is already root; otherwise `execvp()` replaces it and
+    this call never returns.
+    """
+    if os.geteuid() == 0:
+        return
+
+    # A source checkout needs the project root on sys.path for
+    # `python -m my_snaps.<module>`; an installed package is importable from
+    # anywhere, so do not chdir the caller's shell into site-packages.
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(package_dir)
+    if os.path.isfile(os.path.join(project_dir, 'pyproject.toml')):
+        os.chdir(project_dir)
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    command = ['sudo', sys.executable, '-m', module_name] + args
+    try:
+        os.execvp('sudo', command)
+    except OSError as exce:
+        print(f'ERROR: cannot re-run as root with sudo: {exce}',
+              file=sys.stderr)
+        print('HINT: run this command as root or prefix it with sudo.',
+              file=sys.stderr)
+        raise SystemExit(1)
 
 ##############################################################################
 def ago_whence(filename):

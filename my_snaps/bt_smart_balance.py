@@ -7,6 +7,8 @@ import shlex
 import subprocess
 import sys
 
+from my_snaps.MyUtils import reexec_as_root, version_string
+
 #: Smallest ``-dusage`` value ever handed to btrfs. ``btrfs balance
 #: -dusage=0`` means "balance every data chunk", i.e. an unbounded full
 #: balance, so zero (and negatives) are clamped up to this value.
@@ -159,18 +161,12 @@ class BtSmartBalance:
         os.chmod(filename, 0o755)
         print(f'OK: to {filename!r}, wrote:\n{text}')
 
-def rerun_module_as_root(module_name):
-    """ rerun using the module name """
-    if os.geteuid() != 0: # Re-run the script with sudo
-        os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        vp = ['sudo', sys.executable, '-m', module_name] + sys.argv[1:]
-        os.execvp('sudo', vp)
-
-def run():
+def parse_args(argv=None):
+    """ Parse the command line before anything asks for root. """
     import argparse
-    rerun_module_as_root('my_snaps.bt_smart_balance')
-
     parser = argparse.ArgumentParser()
+    parser.add_argument('--version', action='version',
+            version=f'%(prog)s {version_string()}')
     parser.add_argument('-a', '--allocated-pct-min', type=int, default=70,
             help='min allocated percent to balance [0<=val<=99, dflt=70]')
     parser.add_argument('-d', '--dusage', type=int, default=20,
@@ -183,7 +179,7 @@ def run():
     parser.add_argument('-i', '--install-anacron-job', action="store_true",
             help='creates a script in /etc/cron.weekly with current args')
 
-    opts = parser.parse_args()
+    opts = parser.parse_args(argv)
     opts.allocated_pct_min = max(0, min(99, opts.allocated_pct_min))
     opts.wasted_pct_min = max(0, min(99, opts.wasted_pct_min))
     if opts.dusage < MIN_DUSAGE:
@@ -192,7 +188,15 @@ def run():
     opts.dusage = min(99, opts.dusage)
     if not os.path.isdir(opts.mount_point):
         parser.error(f'mount point is not a directory: {opts.mount_point!r}')
+    return opts
 
+def run(argv=None):
+    opts = parse_args(argv)
+    # `_run()` prepends sudo to each btrfs command, so a normal check or
+    # balance needs no whole-process re-exec.  Only installing the job writes
+    # to /etc, and that is the sole action that must itself be root.
+    if opts.install_anacron_job:
+        reexec_as_root('my_snaps.bt_smart_balance', argv)
     tool = BtSmartBalance(options=opts)
     if opts.install_anacron_job:
         tool.install_cron_job()

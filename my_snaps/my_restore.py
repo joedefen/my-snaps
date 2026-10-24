@@ -11,7 +11,8 @@ import re
 import traceback
 from types import SimpleNamespace
 from my_snaps.InlineMenu import Menu
-from my_snaps.MyUtils import timestamp_str, ago_whence
+from my_snaps.MyUtils import (timestamp_str, ago_whence,
+                              reexec_as_root, version_string)
 
 #: `btrfs filesystem show` prints either `Label: 'name'` or `Label: none`;
 #: tolerate both (and an unquoted name) instead of assuming a quoted label.
@@ -70,11 +71,11 @@ def parse_filesystems(show_output):
 
 class BtrfsRestore:
     """ TBD """
-    def __init__(self):
-        if os.geteuid() != 0: # Re-run the script with sudo
-            print('NOTE: restarting with "sudo"')
-            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
-        self.dry_run = False
+    def __init__(self, dry_run=False):
+        # Escalation lives in run(), after argument parsing; constructing the
+        # object is pure Python state and must not exec sudo (tests and the
+        # dry-run path rely on that).
+        self.dry_run = dry_run
         self.filesystems = []
         self.selected_fs = None
         self.last_key = None
@@ -409,31 +410,38 @@ class BtrfsRestore:
 
     def main(self):
         """ The top-level function. """
-        # pylint: disable=import-outside-toplevel
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument('-n', '--dry-run', action="store_true",
-                help='do NOT do anything')
-        opts = parser.parse_args()
-        self.dry_run = opts.dry_run
         self.select_mount()
         os.system('clear')
         todo = 'a'
         while True:
             todo = self.select_restores(todo=todo)
 
-def rerun_module_as_root(module_name):
-    """ rerun using the module name """
-    if os.geteuid() != 0: # Re-run the script with sudo
-        os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        vp = ['sudo', sys.executable, '-m', module_name] + sys.argv[1:]
-        os.execvp('sudo', vp)
+def parse_args(argv=None):
+    """ Parse the command line before anything asks for root.
 
-def run():
+    `--help`/`--version` and usage errors therefore never trigger sudo.  A
+    dry-run is parsed here too so `my-restore -n` can run unprivileged; it
+    only prints the commands it would execute.
+    """
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--version', action='version',
+            version=f'%(prog)s {version_string()}')
+    parser.add_argument('-n', '--dry-run', action="store_true",
+            help='do NOT do anything')
+    return parser.parse_args(argv)
+
+def run(argv=None):
     """Wrap main in try/except."""
     try:
-        rerun_module_as_root('my_snaps.my_restore')
-        BtrfsRestore().main()
+        opts = parse_args(argv)
+        if not opts.dry_run:
+            # A real restore renames/deletes subvolumes and may mount a
+            # filesystem, so it needs root.  A dry-run changes nothing, so it
+            # deliberately stays unprivileged (re-run it with sudo yourself
+            # when merely reading the BTRFS state needs root).
+            reexec_as_root('my_snaps.my_restore', argv)
+        BtrfsRestore(dry_run=opts.dry_run).main()
     except KeyboardInterrupt:
         pass
     except Exception as exce:
