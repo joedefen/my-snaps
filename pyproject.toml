@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "my-snaps"
-version = "1.0.9"
+version = "2.0.0"
 description = "Simple BTRFS Snapshot Tools"
 authors = [
     {name = "Joe Defen", email = "joedef@duck.com"},
@@ -22,6 +22,11 @@ classifiers = [
     "Operating System :: POSIX :: Linux"
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/joedefen/my-snaps"
 "Bug Tracker" = "https://github.com/joedefen/my-snaps/issues"
@@ -30,3 +35,8 @@ classifiers = [
 my-snaps = "my_snaps.main:run"
 my-restore = "my_snaps.my_restore:run"
 bt-smart-balance = "my_snaps.bt_smart_balance:run"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

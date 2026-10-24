@@ -356,11 +356,12 @@ class BTRFS:
         if self.DB: print('DB: +', command)
         process = subprocess.Popen(command, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, shell=True)
-        status = process.wait()
         output, err = process.communicate()
-        output, err = output.decode('utf-8'), err.decode('utf-8')
-        output, err = output.splitlines(keepends=False), err.splitlines(keepends=False)
-        return (output, err, os.WEXITSTATUS(status))
+        output = output.decode('utf-8', errors='replace')
+        err = err.decode('utf-8', errors='replace')
+        output = output.splitlines(keepends=False)
+        err = err.splitlines(keepends=False)
+        return (output, err, process.returncode)
 
     @staticmethod
     def _slurp_file(pathname):
