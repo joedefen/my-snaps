@@ -107,7 +107,10 @@ class BtrfsRestore:
                 if self.dry_run:
                     os.system(f'echo WOULD + {precmd!r} {cmd!r}')
                 elif 'reboot' not in cmd or self.check_bootable():
-                    os.system(f'clear;set -x; {precmd} {cmd}')
+                    status = os.system(f'clear;set -x; {precmd} {cmd}')
+                    if status != 0:
+                        print(f'ERROR: command failed (wait status {status}):'
+                              f' {cmd}', file=sys.stderr)
             todo = choice.next
             if once:
                 return todo
@@ -306,6 +309,22 @@ class BtrfsRestore:
                 sync = f'rsync -a -del -H "{efi_back}/" "/efi/" && '
             return sync
 
+        def freed_name_cmd(subvol):
+            """ Free `subvol`'s name so a new subvolume can take it.
+
+            A subvolume that is the root of an active mount cannot be
+            deleted -- the kernel answers EBUSY -- and its name cannot be
+            reused while it exists. Because a mount follows the subvolume
+            id and not its name, renaming a mounted subvolume is safe: the
+            running system keeps reading the old extents until reboot, and
+            the replaced tip stays recoverable as a `*ToDel` entry that
+            `get_state()` offers for explicit deletion later.
+            """
+            if subvol in self.mounted_subpaths:
+                aside = f'{subvol}.{timestamp_str()}ToDel'
+                return f'mv "{subvol}" "{aside}" && '
+            return f'btrfs sub del "{subvol}" && '
+
         # pylint: disable=too-many-branches
         problem = self.mnt_problem()
         if problem:
@@ -323,11 +342,11 @@ class BtrfsRestore:
         for subvol, ns in subs.items():
             lead = f'{subvol}'
             if ns.revert:
-                run = sync_cmd(subvol, ns.revert)
-                if subvol in self.mounted_subpaths:
-                    run += f' mv "{subvol}" "{subvol}.ToDel" && '
-                else:
-                    run += f' btrfs sub del "{subvol}" && '
+                # The reverted tip is still present, so the *current*
+                # subvolume is the copy made by the earlier revert. Freeing
+                # its name is what makes `revert` and `restore` symmetric.
+                prep = freed_name_cmd(subvol)
+                run = sync_cmd(subvol, ns.revert) + prep
                 run += f'mv "{ns.revert}" "{subvol}"'
                 cmds[key] = [f'{lead}: revert {ns.revert}', run]
                 key, lead = advance(key, lead)
@@ -337,7 +356,6 @@ class BtrfsRestore:
                         f'btrfs sub del "{ns.revert}"',
                     ]
                     key, lead = advance(key, lead)
-                prep = f'btrfs sub del "{subvol}" && '
             else:
                 prep = f'mv "{subvol}" "{subvol}.{timestamp_str()}=Reverted" && '
 
