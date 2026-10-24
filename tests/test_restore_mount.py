@@ -171,3 +171,87 @@ def test_select_restores_refuses_when_mnt_is_not_the_chosen_filesystem(
         inst.select_restores()
     assert caught.value.code == 1
     assert 'nothing is mounted on /mnt' in capsys.readouterr().err
+
+
+# --- more than ten filesystems --------------------------------------------
+
+def test_mount_choices_use_single_character_keys_past_nine():
+    inst = make_instance()
+    inst.filesystems = [SimpleNamespace(label='', path=f'/dev/sd{i}')
+                        for i in range(12)]
+    cmds, todo = inst.mount_choices()
+    assert list(cmds) == list('0123456789ab')
+    assert todo == '0'
+
+
+def test_select_mount_maps_a_letter_key_to_the_right_filesystem(monkeypatch):
+    fss = [SimpleNamespace(label='', path=f'/dev/sd{i}') for i in range(11)]
+    inst = make_instance()
+    monkeypatch.setattr(my_restore, 'parse_filesystems', lambda _out: fss)
+    monkeypatch.setattr(my_restore.subprocess, 'check_output',
+                        lambda *a, **k: b'')
+    monkeypatch.setattr(my_restore.os, 'system', lambda cmd: 0)
+    FakeMenu.selected_key = 'a'
+    monkeypatch.setattr(my_restore, 'Menu', FakeMenu)
+
+    inst.select_mount()
+
+    assert inst.selected_fs is fss[10]
+
+
+# --- bootability does not assume one ESP layout ---------------------------
+
+def _bootable_instance(tmp_path, monkeypatch, efi_walk):
+    """ Build an instance whose roots exist under tmp_path and whose /efi
+    is supplied by `efi_walk`. """
+    mnt = tmp_path / 'mnt'
+    (mnt / 'root/usr/lib/modules/6.1.0-test').mkdir(parents=True)
+    (mnt / 'root/.efi-back/machine-id/6.1.0-test').mkdir(parents=True)
+    monkeypatch.setattr(my_restore, 'MNT', str(mnt))
+    real_walk = my_restore.os.walk
+
+    def fake_walk(folder):
+        if folder == '/efi':
+            return iter(efi_walk)
+        return real_walk(folder)
+
+    monkeypatch.setattr(my_restore.os, 'walk', fake_walk)
+    inst = object.__new__(my_restore.BtrfsRestore)
+    inst.root_subvol = 'root'
+    inst.is_bootable = True
+    return inst
+
+
+def test_check_bootable_accepts_a_nested_efi_layout(tmp_path, monkeypatch):
+    inst = _bootable_instance(
+        tmp_path, monkeypatch,
+        [('/efi/machine-id', ['6.1.0-test'], [])])
+    assert inst.check_bootable() is True
+
+
+def test_check_bootable_accepts_a_flat_efi_layout(tmp_path, monkeypatch):
+    inst = _bootable_instance(
+        tmp_path, monkeypatch,
+        [('/efi', [], ['vmlinuz-6.1.0-test'])])
+    assert inst.check_bootable() is True
+
+
+def test_check_bootable_reports_a_missing_kernel(tmp_path, monkeypatch, capsys):
+    mnt = tmp_path / 'mnt'
+    (mnt / 'root/usr/lib/modules/6.1.0-test').mkdir(parents=True)
+    (mnt / 'root/.efi-back/machine-id/5.0.0-old').mkdir(parents=True)
+    monkeypatch.setattr(my_restore, 'MNT', str(mnt))
+    real_walk = my_restore.os.walk
+
+    def fake_walk(folder):
+        if folder == '/efi':
+            return iter([('/efi/machine-id', ['6.1.0-test'], [])])
+        return real_walk(folder)
+
+    monkeypatch.setattr(my_restore.os, 'walk', fake_walk)
+    inst = object.__new__(my_restore.BtrfsRestore)
+    inst.root_subvol = 'root'
+    inst.is_bootable = True
+
+    assert inst.check_bootable() is False
+    assert 'NOT bootable' in capsys.readouterr().out

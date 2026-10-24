@@ -5,7 +5,6 @@
 
 import sys
 import os
-import glob
 import subprocess
 import re
 import traceback
@@ -23,6 +22,17 @@ PATH_RE = re.compile(r"\bpath\s+(/dev/\S+)")
 #: The single mount point this tool operates on. Every subvolume it renames
 #: or deletes is relative to this directory, so it must be a real BTRFS mount.
 MNT = '/mnt'
+
+#: Keys offered for choices whose count is not known in advance (the
+#: filesystem picker can list more than ten filesystems). The menu reads one
+#: character, so `str(idx)` would make entries from index 10 on unselectable.
+#: `x` and `y` are reserved by `BtrfsRestore.do_command()` for EXIT and the
+#: dry-run toggle.
+MENU_KEYS = ''.join(
+    key for key in ('0123456789'
+                    'abcdefghijklmnopqrstuvwxyz'
+                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+    if key not in ('x', 'y'))
 
 
 def iter_mounts():
@@ -70,7 +80,13 @@ def parse_filesystems(show_output):
     return rv
 
 class BtrfsRestore:
-    """ TBD """
+    """ Mount a chosen BTRFS filesystem on /mnt and restore subvolumes.
+
+    Construction is intentionally inert: it only records options and
+    collects the mounts that already exist. `main()` performs the privilege
+    escalation and the destructive work, so `--dry-run` and the tests can
+    build an instance without sudo and without touching any filesystem.
+    """
     def __init__(self, dry_run=False):
         # Escalation lives in run(), after argument parsing; constructing the
         # object is pure Python state and must not exec sudo (tests and the
@@ -87,7 +103,14 @@ class BtrfsRestore:
         self.is_bootable = True # until proved otherwise
 
     def do_command(self, prompts, todo=None, precmd='', once=False):
-        """ TBD"""
+        """ Show `prompts` as a menu and run the selected command.
+
+        `x` always exits (after a bootability check) and `y` toggles the
+        dry-run flag without running anything. Every other command has
+        `precmd` prepended and is executed through the shell. With `once`
+        the menu returns after one valid selection; otherwise it loops,
+        skipping comment-only commands.
+        """
         prompts['x'] = 'EXIT'
         while True:
             prompts['y'] = ('toggle dry-run='
@@ -149,18 +172,28 @@ class BtrfsRestore:
         `umount /dev` can tear down devtmpfs, and if it fails the `&&`
         short-circuits and leaves the chosen filesystem unmounted while
         `select_restores()` happily inspects whatever is on /mnt.
+
+        Keys come from `MENU_KEYS` rather than `str(idx)` because the menu
+        reads a single character; with a plain index only the first ten
+        filesystems could ever be picked.
         """
+        if len(self.filesystems) > len(MENU_KEYS):
+            print(f'ERROR: {len(self.filesystems)} BTRFS filesystems is more '
+                  f'than the {len(MENU_KEYS)} this menu can label',
+                  file=sys.stderr)
+            sys.exit(1)
         cmds, todo = {}, '-'
         mounted = self.slash_mnt.device
         for idx, fs in enumerate(self.filesystems):
+            key = MENU_KEYS[idx]
             if fs.path == mounted:
                 cmd = f'# KEEP {fs.path!r} mounted on {MNT}'
             else:
                 prefix = f'umount {MNT} && ' if mounted else ''
                 label = fs.label if fs.label else 'no-label'
                 cmd = f'{prefix}mount {fs.path} {MNT} # {label}'
-            cmds[str(idx)] = cmd
-            todo = '0'
+            cmds[key] = cmd
+            todo = MENU_KEYS[0]
         return cmds, todo
 
     def select_mount(self):
@@ -184,26 +217,46 @@ class BtrfsRestore:
         if self.last_key not in valid_keys:
             print(f'ERROR: unexpected selection {self.last_key!r}', file=sys.stderr)
             sys.exit(1)
-        self.selected_fs = self.filesystems[int(self.last_key)]
+        self.selected_fs = self.filesystems[MENU_KEYS.index(self.last_key)]
 
     def check_bootable(self):
-        """ Check whether /usr/lib/modules, /efi/, and /.efi-back/ agree"""
+        """ Check whether /usr/lib/modules, /efi/, and /.efi-back/ agree.
+
+        The module directory names the installed kernels; /efi and the
+        snapshot's `.efi-back` hold the ESP copies. Instead of assuming a
+        fixed systemd-boot layout (an exactly-32-character machine-id
+        directory), every module name is matched against any path component
+        below those two trees, so flat and nested layouts both work.
+        """
         def get_list(folder):
             try:
-                rv = glob.glob(f'{folder}/*')
-                rv = [os.path.basename(item) for item in rv]
-                return rv
+                return os.listdir(folder)
             except Exception:
                 return []
         def pr(my_list):
-            return ' '.join(my_list)
-        efis = get_list('/efi/????????????????????????????????')
-        if not efis or not self.root_subvol:
+            return ' '.join(sorted(my_list))
+        def matching(folder, modules):
+            """ Return the modules whose names occur anywhere under folder. """
+            try:
+                paths = []
+                for dirpath, dirnames, filenames in os.walk(folder):
+                    rel = os.path.relpath(dirpath, folder)
+                    prefix = '' if rel == '.' else f'{rel}/'
+                    paths.extend(f'{prefix}{name}'
+                                 for name in dirnames + filenames)
+            except Exception:
+                return []
+            return [mod for mod in modules
+                    if any(mod in path for path in paths)]
+        if not self.root_subvol:
             return True
         root = os.path.join(MNT, self.root_subvol)
         mods = get_list(f'{root}/usr/lib/modules')
-        backs = get_list(f'{root}/.efi-back/????????????????????????????????')
-        overlap = set(mods) & set(efis) & set(backs)
+        efis = matching('/efi', mods)
+        backs = matching(f'{root}/.efi-back', mods)
+        if not efis:
+            return True
+        overlap = set(efis) & set(backs)
         if not overlap and self.is_bootable:
             print('NOT bootable (no overlap)')
             print(f'  modules: {pr(mods)}\n  /efi: {pr(efis)}\n'
@@ -325,7 +378,12 @@ class BtrfsRestore:
         return f'rsync -a -H --delete "{efi_back}/" "/efi/" && '
 
     def select_restores(self, todo='a'):
-        """ TBD """
+        """ Offer restore, revert, delete and reboot actions for /mnt.
+
+        Refuses to run when `mnt_problem()` says /mnt does not hold the
+        selected filesystem, because every command below is relative to it.
+        Returns the key to preselect the next time the menu is shown.
+        """
         def next_key(key):
             """ Next menu key, skipping the ones reserved by `do_command()`. """
             key = Menu.get_next_key(key)

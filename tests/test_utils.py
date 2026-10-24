@@ -17,6 +17,13 @@ def test_human():
     assert human(1024**3) == "1.0G"
 
 
+def test_human_keeps_a_value_in_one_unit_until_it_no_longer_fits():
+    # The old 99.95 cutoff printed 102400 bytes as 0.1M; it must stay 100.0K.
+    assert human(99.9 * 1024) == "99.9K"
+    assert human(100 * 1024) == "100.0K"
+    assert human(1024**2 - 1) == "1.0M"
+
+
 def test_ago_str():
     assert ago_str(0) == "0s"
     assert ago_str(59) == "59s"

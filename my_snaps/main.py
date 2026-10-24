@@ -54,7 +54,13 @@ class BTRFSError(RuntimeError):
 
 
 class BTRFS:
-    """ TBD """
+    """ Drive the my-snaps TUI and the non-interactive snapshot actions.
+
+    One instance owns the discovered devices and subvolumes (`self.devs`),
+    the rows shown on screen, the temporary mounts under `/tmp`, and the
+    curses window. `main()` creates it after the root re-exec; constructing
+    it only records options.
+    """
 
     # How long the TUI waits for a keystroke before it checks for a
     # hot-plugged device or a new mount (see _poll_device_changes).
@@ -79,7 +85,7 @@ class BTRFS:
         self.help_mode = False
         self.win = None
         self.rows = []
-        self.dirty = True # TBD: need to refresh knowledge
+        self.dirty = True # re-scan devices and mounts before the next draw
         self.show_size = False # until we calc disk usage
 
         # Inline (non-modal) confirmation/input.  The prompt is rendered as an
@@ -1014,7 +1020,15 @@ class BTRFS:
         return ''
 
     def gather_snapshots(self):
-        """ TBD """
+        """ Link each snapshot subvolume to the subvolume it was made of.
+
+        A snapshot lives at `<subvol>.YYYY-MM-DD-HHMMSS[=Label]` under the
+        `@snapshots` subvolume. The part before the timestamp names its
+        origin; snapshots that do not parse that way, or whose origin is not
+        mounted, are attached to the snapshot subvolume itself. Each label
+        is also collected into `label_groups` so retention can count per
+        label.
+        """
         def link(of_subvol, subvol):
             if of_subvol and subvol:
                 of_subvol.snaps.append(subvol)
@@ -1134,22 +1148,26 @@ class BTRFS:
                 print(f'DB: {ns.size=} {ns.path=!r}')
 
     def calc_path_width(self):
-        """ TBD """
-        rv = max([len(x.path) for x in self.rows])
+        """ Return the display width of the path column."""
+        rv = max((len(x.path) for x in self.rows), default=0)
         return max(len('Subvolume'), rv)
 
     def calc_mounts_width(self):
-        """ TBD """
-        rv = max([len(x.mount) for x in self.rows])
+        """ Return the display width of the mount column."""
+        rv = max((len(x.mount) for x in self.rows), default=0)
         return max(len('Mount'), rv)
 
     def calc_devs_width(self):
-        """ TBD """
-        rv = max([len(x.dev) for x in self.rows])
+        """ Return the display width of the device column."""
+        rv = max((len(x.dev) for x in self.rows), default=0)
         return max(len('Device'), rv)
 
     def refresh_info(self, body=None):
-        """ TBD """
+        """ Redraw the listing, optionally replacing the body with messages.
+
+        `body` is used for transient output (errors, confirmations) that
+        should occupy the body area instead of the subvolume rows.
+        """
 
         win = self.win
         self._refresh_if_dirty()
@@ -1258,7 +1276,7 @@ def parse_args(argv=None):
     return opts
 
 def main(argv=None):
-    """ TBD """
+    """ Parse arguments, re-exec as root, then build and run the tool."""
     global btrfs
     opts = parse_args(argv)
     # Every action that survives parsing (window, -p, -s, --cron) mounts

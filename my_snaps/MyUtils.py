@@ -18,15 +18,19 @@ def timestamp_str():
 
 ##############################################################################
 def human(number):
-    """ Return a concise number description."""
+    """ Return a concise number description.
+
+    A unit is only left once the value would no longer fit with one decimal
+    place, so values never jump from something like `99.9K` to `0.1M`: the
+    same quantity is always rendered as `100.0K`.
+    """
     suffixes = ['K', 'M', 'G', 'T']
     number = float(number)
-    while suffixes:
-        suffix = suffixes.pop(0)
+    for suffix in suffixes[:-1]:
         number /= 1024
-        if number < 99.95 or not suffixes:
+        if number < 999.95:
             return f'{number:.1f}{suffix}'
-    return None
+    return f'{number / 1024:.1f}{suffixes[-1]}'
 
 ##############################################################################
 def ago_str(delta_secs, signed=False):

@@ -348,7 +348,7 @@ class Menu:
                 self._prompt_mode(enable=False)
 
 def runner(_): # def runner(argv):
-    """ TBD """
+    """ Demo entry point exercising the simple, multiline and mixed menus."""
     
     def simple_menu():
         default = 'A'
