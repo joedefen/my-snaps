@@ -46,6 +46,10 @@ class BTRFS:
         self.dirty = True # TBD: need to refresh knowledge
         self.show_size = False # until we calc disk usage
 
+        # Startup progress goes to stderr only when interactive (and before
+        # curses owns the screen) so logs/cron output stay clean.
+        self.show_progress = bool(getattr(sys.stderr, 'isatty', lambda: False)())
+
         self.blkid_lines = [] # to avoid rerunning "blkid" on refresh
         self.mounts_lines = [] # to avoid rereading "/proc/mounts" on refresh
 
@@ -111,16 +115,45 @@ class BTRFS:
         elif os.path.isfile(filename):
             os.remove(filename)
 
+    def _progress(self, message, final=False):
+        """ Show transient startup progress on stderr (interactive, no window).
+        Percent-complete is deliberately not shown: the amount of work is not
+        knowable until "btrfs sub list" (and possibly mount) has returned, so
+        phase counts and per-device indexes are the only honest measures.
+        """
+        if not self.show_progress or self.win is not None:
+            return
+        if final:
+            sys.stderr.write('\r' + ' ' * 79 + '\r')
+        else:
+            sys.stderr.write('\r' + message[:79].ljust(79))
+        sys.stderr.flush()
+
     def _refresh_if_dirty(self):
         if not self.dirty:
             return
+        step, steps = 1, 5
+
+        def phase(label):
+            self._progress(
+                f'Reading BTRFS state. Be patient ... [{step}/{steps}] {label}')
+
+        phase('scanning known subvolumes')
         # save sizes for xfer to refresh (cuz expensive)
         sizes = {}
         for ns in self.subvol_iter():
             sizes[f'{ns.dev}{ns.path}'] = ns.size
+
+        step += 1; phase('identifying BTRFS devices')
         self._load_devs()  # learn all the BTRFS partitions
+
+        step += 1; phase('mounting BTRFS devices')
         self._mount_tmps()  # mount BTRFS partitions in /tmp/.btrfs
+
+        step += 1; phase('matching mount points')
         self._determine_mount_points() # associated current mounts with subvols
+
+        step += 1; phase('gathering snapshots')
         self.gather_snapshots()  # determine subvols that are snapshots
         # restore sizes after refresh
         for ns in self.subvol_iter():
@@ -129,6 +162,7 @@ class BTRFS:
                 ns.size = sizes[key]
         self.make_rows()
         self.dirty = False
+        self._progress('', final=True)
 
     def subvol_iter(self, subvol_ns=None, top_down=True):
         """  subvolume iterator recursively top-down (or bottom-up)
@@ -416,7 +450,11 @@ class BTRFS:
     def _mount_tmps(self):
         """ mount each btrfs as needed """
         os.makedirs(self.tmp_dir, exist_ok=True)
-        for dev, dev_ns in self.devs.items():
+        dev_count = len(self.devs)
+        for dev_ndx, (dev, dev_ns) in enumerate(self.devs.items(), start=1):
+            self._progress(
+                'Reading BTRFS state. Be patient ... [3/5] '
+                f'mounting {dev} ({dev_ndx}/{dev_count})')
             tmp_mount_dir = os.path.join(self.tmp_dir, dev)
             if not os.path.ismount(tmp_mount_dir):
                 os.makedirs(tmp_mount_dir, exist_ok=True)
