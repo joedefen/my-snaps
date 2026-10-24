@@ -396,6 +396,46 @@ def test_create_snap_refusals_flash_instead_of_alerting():
     assert win.alerts == []
 
 
+def test_del_subvolume_reports_failure_without_window(capsys):
+    """-s/--cron have no window: report to stderr, do not raise AttributeError."""
+    subvol = make_subvol()
+    self = make_btrfs(None)
+    self.devs['dev0'] = SimpleNamespace(tmp_path='/tmp/.btrfs/dev0')
+    self._slurp_command = lambda cmd: (['out'], ['err'], 1)
+
+    assert self._del_subvolume(subvol, ans='y') is False
+    err = capsys.readouterr().err
+    assert 'FAILED' in err
+    assert 'btrfs sub del' in err
+    assert 'err' in err
+    assert self.dirty is False
+
+
+def test_create_snap_reports_failure_without_window(capsys):
+    subvol = make_subvol()
+    subvol.mount = '/mnt/@root'
+    self = make_btrfs(None)
+    self.devs['dev0'] = SimpleNamespace(tmp_path='/tmp/.btrfs/dev0')
+    self.snap_subvol = make_subvol('/@snapshots')
+    self._slurp_command = lambda cmd: ([], ['ERROR: cannot snap'], 1)
+
+    assert self._create_snap(subvol, suffix='=Test') is False
+    err = capsys.readouterr().err
+    assert 'FAILED(1): btrfs sub snap -r /mnt/@root' in err
+    assert 'ERROR: cannot snap' in err
+    assert self.dirty is False
+
+
+def test_refusals_are_reported_without_window(capsys):
+    self = make_btrfs(None)
+    self.devs['dev0'] = SimpleNamespace(tmp_path='/tmp/.btrfs/dev0')
+    unmounted = make_subvol('/@home')
+    unmounted.mount = ''
+
+    assert self._create_snap(unmounted) is False
+    assert 'Cannot snap an unmounted subvolume' in capsys.readouterr().err
+
+
 def test_labels_are_drawn_on_their_own_dim_line():
     win = FakeWin()
     self = make_btrfs(win)

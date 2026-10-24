@@ -383,10 +383,26 @@ class BTRFS:
         """ Report a refusal in a flash (auto-dismissing) box, not an alert.
 
         Denials only need a few words read, so there is no point in making the
-        user press a key to get rid of a full alert dialog.
+        user press a key to get rid of a full alert dialog.  Without a window
+        (-s / --cron / -p) stderr is the only channel, so the refusal is
+        printed instead of being swallowed.
         """
         if self.win:
             self.win.flash(message, duration=seconds)
+        else:
+            print(f'ERROR: {message}', file=sys.stderr)
+        return False
+
+    def _report_error(self, message):
+        """ Report a failed command: alert in the TUI, stderr otherwise.
+
+        `-s`/`--cron` run with `self.win is None`, so an alert would raise
+        AttributeError and hide the real btrfs error behind a traceback.
+        """
+        if self.win:
+            self.win.alert(message)
+        else:
+            print(f'ERROR: {message}', file=sys.stderr)
         return False
 
     def _replace_eldest_snaps_of_subvol(self, subvol_ns, like_snaps,
@@ -561,8 +577,8 @@ class BTRFS:
         cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
         out, err, code = self._slurp_command(cmd)
         if code:
-            self.win.alert(f'FAILED({code}): {cmd}\n' + '\n'.join(out + err))
-            return False
+            return self._report_error(
+                f'FAILED({code}): {cmd}\n' + '\n'.join(out + err))
         self.dirty = True
         return True
 
@@ -592,8 +608,8 @@ class BTRFS:
             cmd = f'btrfs sub del {snap_path}'
             out, err, code = self._slurp_command(cmd)
             if code:
-                self.win.alert(f'FAILED: {cmd}\n' + '\n'.join(out + err))
-                return False
+                return self._report_error(
+                    f'FAILED: {cmd}\n' + '\n'.join(out + err))
             self.dirty = True
         return True
 
