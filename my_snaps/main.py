@@ -32,6 +32,16 @@ from my_snaps.MyUtils import (human, ago_whence, timestamp_str,
 
 ##############################################################################
 
+class BTRFSError(RuntimeError):
+    """ An operational refusal that `run()` reports without a traceback.
+
+    Raised for conditions the user can act on (a non-BTRFS root, a missing
+    `/.snapshots` mount, a device that will not mount).  Unlike an `assert`,
+    it survives `python -O`, and unlike a bare exception it lets `run()`
+    print just the actionable message.
+    """
+
+
 class BTRFS:
     """ TBD """
 
@@ -864,7 +874,9 @@ class BTRFS:
                 f'mounting {dev} ({dev_ndx}/{dev_count})')
             tmp_mount_dir = self._ensure_tmp_mount(dev)
             if tmp_mount_dir is None:
-                raise Exception(f'cannot mount {dev_ns.dev}')
+                raise BTRFSError(
+                    f'cannot mount {dev_ns.dev} under {self.tmp_dir} to read '
+                    'its subvolumes; check dmesg, or mount it manually first')
             lines, _, _ = self._slurp_command(
                 ['btrfs', 'sub', 'list', tmp_mount_dir])
             self._init_dev_subvols(dev_ns, self.parse_subvol_list(lines))
@@ -923,9 +935,11 @@ class BTRFS:
     def _determine_mount_points(self):
         mounts = self._all_mounts()
         self.mount_fingerprint = self._mount_fingerprint(mounts)
-        for _dev, mount, fstype, ident, _subvol in mounts:
+        for dev, mount, fstype, ident, _subvol in mounts:
             if mount == '/' and fstype != 'btrfs':
-                assert False, f'root is not BTRFS ({mount}, {fstype})'
+                raise BTRFSError(
+                    f'root is not BTRFS: {mount} is {fstype} on {dev}; '
+                    'my-snaps only works with a BTRFS root')
             if fstype != 'btrfs' or ident is None:
                 continue
             for subvol in self.subvol_iter():
@@ -948,7 +962,10 @@ class BTRFS:
             for subvol in self.subvol_iter():
                 if subvol.mount:
                     print(f'DB:   {subvol.dev=} {subvol.mount=} {subvol.path=}')
-        assert self.snap_subvol, "cannot find mounted /.snapshots"
+        if not self.snap_subvol:
+            raise BTRFSError(
+                'cannot find a BTRFS mount at /.snapshots: '
+                'mount the snapshot subvolume there before running my-snaps')
 
     @staticmethod
     def _get_label(string):
@@ -1213,6 +1230,11 @@ def run():
             btrfs.stop_curses()
         print('\n   OK, QUITTING NOW\n')
         sys.exit(0)
+    except BTRFSError as exce:
+        if btrfs and btrfs.win:
+            btrfs.stop_curses()
+        print(f'ERROR: {exce}', file=sys.stderr)
+        sys.exit(1)
     except Exception as exce:
         if btrfs and btrfs.win:
             btrfs.stop_curses()

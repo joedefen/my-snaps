@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from my_snaps.main import BTRFS
+import pytest
+
+from my_snaps.main import BTRFS, BTRFSError
 
 ###############################################################################
 # Output parsing
@@ -240,3 +242,37 @@ def test_init_dev_subvols_builds_tree():
     assert snap.parent == '2818'
     assert dev_ns.paths['/deb@snapshots'].children == [snap]
     assert dev_ns.tmp_path == '/tmp/.btrfs/nvme0n1p2'
+
+
+###############################################################################
+# Operational refusals
+#
+# These used to be `assert` statements, which `python -O` strips, leaving the
+# caller with an AttributeError or a wrong-but-silent mount map.
+###############################################################################
+
+def _mount_point_btrfs(mounts):
+    self = BTRFS.__new__(BTRFS)
+    self.DB = False
+    self.devs = {}
+    self.snap_subvol = None
+    self.snap_targets = []
+    self.mount_fingerprint = None
+    self._all_mounts = lambda: list(mounts)
+    return self
+
+
+def test_determine_mount_points_rejects_a_non_btrfs_root():
+    self = _mount_point_btrfs([
+        ('/dev/sda1', '/', 'ext4', None, None)])
+
+    with pytest.raises(BTRFSError, match='root is not BTRFS'):
+        self._determine_mount_points()
+
+
+def test_determine_mount_points_requires_a_snapshots_mount():
+    self = _mount_point_btrfs([])
+
+    with pytest.raises(BTRFSError, match=r'cannot find a BTRFS mount at '
+                                        r'/\.snapshots'):
+        self._determine_mount_points()
