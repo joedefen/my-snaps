@@ -11,6 +11,7 @@ import sys
 
 import pytest
 
+import my_snaps.main as main_module
 from my_snaps.main import BTRFS
 
 
@@ -52,6 +53,50 @@ def test_large_output_does_not_deadlock(btrfs):
     assert err == []
     assert len(out) == 1
     assert len(out[0]) == 1_000_000
+
+
+def test_large_stderr_does_not_deadlock(btrfs):
+    """An unread stderr pipe can deadlock just as easily as stdout."""
+    command = python_command("import sys; sys.stderr.write('e' * 1_000_000)")
+    out, err, code = btrfs._slurp_command(command)
+    assert code == 0
+    assert out == []
+    assert len(err) == 1
+    assert len(err[0]) == 1_000_000
+
+
+def test_wait_is_never_called_before_communicate(btrfs, monkeypatch):
+    """Regression guard: wait() must not block before the pipes are drained.
+
+    A child writing more than the pipe buffer blocks until the parent reads;
+    calling wait() first therefore deadlocks.  communicate() drains stdout
+    and stderr concurrently, so it must be the only blocking call.
+    """
+    instances = []
+
+    class FakePopen:
+        def __init__(self, command, **_kwargs):
+            self.command = command
+            self.returncode = 0
+            self.calls = []
+            instances.append(self)
+
+        def wait(self):
+            self.calls.append('wait')
+            raise AssertionError('wait() called before communicate()')
+
+        def communicate(self):
+            self.calls.append('communicate')
+            return b'out\n', b'err\n'
+
+    monkeypatch.setattr(main_module.subprocess, 'Popen', FakePopen)
+
+    out, err, code = btrfs._slurp_command('btrfs sub list /tmp/.btrfs/sda1')
+
+    assert instances[0].calls == ['communicate']
+    assert out == ['out']
+    assert err == ['err']
+    assert code == 0
 
 
 def test_non_utf8_output_does_not_raise(btrfs):

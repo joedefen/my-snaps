@@ -614,6 +614,13 @@ class BTRFS:
         return True
 
     def _slurp_command(self, command):
+        """ Run `command` through the shell; return (stdout, stderr, exit code).
+
+        `communicate()` must be the first blocking call on the child: it
+        drains stdout and stderr concurrently.  Calling `wait()` first
+        deadlocks as soon as either stream fills its pipe buffer, which is
+        plausible for `btrfs sub list` on a large tree or for `df`.
+        """
         if self.DB: print('DB: +', command)
         process = subprocess.Popen(command, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, shell=True)
