@@ -35,6 +35,7 @@ import tty
 import shutil
 import signal
 from types import SimpleNamespace
+from typing import ClassVar
 
 ####################################################################################
 
@@ -67,6 +68,16 @@ class Term:
 class Menu:
     """ A simple menu system """
     save_attrs = None
+
+    # Decoded ANSI arrow sequences -> cursor delta.  Up/left move toward the
+    # top, down/right toward the bottom; the menu is a single vertical list,
+    # so left and right are aliases rather than separate actions.
+    ARROW_DELTAS: ClassVar[dict[str, int]] = {
+        '\033[A': -1,  # up
+        '\033[D': -1,  # left
+        '\033[B': 1,   # down
+        '\033[C': 1,   # right
+    }
 
     class InputTimeout(Exception):
         """ Raised for obvious reasons. """
@@ -271,6 +282,11 @@ class Menu:
             self._bottom_line(self.default_bottom)
 
     @staticmethod
+    def arrow_delta(ans):
+        """ Map a decoded arrow sequence to a cursor delta, or None. """
+        return Menu.ARROW_DELTAS.get(ans)
+
+    @staticmethod
     def get_next_key(key):
         """ Returns the next ASCII char after the given;
             e.g., 'b' = get_next_key('a')
@@ -309,12 +325,10 @@ class Menu:
                     ans += key
                     if key.isalnum() or key in ('\r', '\n', ' '):
                         break
-                if ans in ('\033[A', '\033[C'):
+                delta = Menu.arrow_delta(ans)
+                if delta is not None:
                     self._restore_default_bottom()
-                    self._move(-1)
-                elif ans in ('\033[B', '\033[C'):
-                    self._restore_default_bottom()
-                    self._move(1)
+                    self._move(delta)
                 elif ans in ('\r', '\n', ' '):
                     if self.selected < len(self.lines):
                         self._restore_default_bottom()
