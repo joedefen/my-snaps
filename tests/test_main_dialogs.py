@@ -133,7 +133,7 @@ def test_del_subvolume_confirm_y_deletes():
 
     assert self.confirm.active is False
     assert win.passthrough_mode is False
-    assert commands == ['btrfs sub del /tmp/.btrfs/dev0/@root']
+    assert commands == [['btrfs', 'sub', 'del', '/tmp/.btrfs/dev0/@root']]
     assert self.dirty is True
 
 

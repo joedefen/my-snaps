@@ -84,7 +84,7 @@ def test_scan_block_devices_falls_back_to_blkid():
 
     def slurp(cmd):
         calls.append(cmd)
-        if cmd.startswith('lsblk'):
+        if cmd[0] == 'lsblk':
             return [], [], 1  # e.g. lsblk not installed
         return ['/dev/sda1: LABEL="x" TYPE="btrfs"'], [], 0
 
@@ -92,8 +92,8 @@ def test_scan_block_devices_falls_back_to_blkid():
 
     recs = self._scan_block_devices()
 
-    assert calls[0].startswith('lsblk')
-    assert calls[1] == 'blkid'
+    assert calls[0][0] == 'lsblk'
+    assert calls[1] == ['blkid']
     assert recs == [{'LABEL': 'x', 'FSTYPE': 'btrfs',
                      'PATH': '/dev/sda1', 'NAME': 'sda1'}]
 

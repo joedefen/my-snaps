@@ -19,6 +19,7 @@ starting the window.
 import sys
 import os
 import re
+import shlex
 import atexit
 import traceback
 import subprocess
@@ -574,11 +575,11 @@ class BTRFS:
         snap_dir = f'{dev_ns.tmp_path}{self.snap_subvol.path}'
         snap_path = f'{snap_dir}{subvol_ns.path}{suffix}'
 
-        cmd = f'btrfs sub snap -r {subvol_ns.mount} {snap_path}'
+        cmd = ['btrfs', 'sub', 'snap', '-r', subvol_ns.mount, snap_path]
         out, err, code = self._slurp_command(cmd)
         if code:
             return self._report_error(
-                f'FAILED({code}): {cmd}\n' + '\n'.join(out + err))
+                f'FAILED({code}): {shlex.join(cmd)}\n' + '\n'.join(out + err))
         self.dirty = True
         return True
 
@@ -605,25 +606,33 @@ class BTRFS:
         dev_ns = self.devs[subvol_ns.dev]
         for ns in self.subvol_iter(subvol_ns, top_down=False):
             snap_path = f'{dev_ns.tmp_path}{ns.path}'
-            cmd = f'btrfs sub del {snap_path}'
+            cmd = ['btrfs', 'sub', 'del', snap_path]
             out, err, code = self._slurp_command(cmd)
             if code:
                 return self._report_error(
-                    f'FAILED: {cmd}\n' + '\n'.join(out + err))
+                    f'FAILED: {shlex.join(cmd)}\n' + '\n'.join(out + err))
             self.dirty = True
         return True
 
-    def _slurp_command(self, command):
-        """ Run `command` through the shell; return (stdout, stderr, exit code).
+    def _slurp_command(self, command, cwd=None):
+        """ Run an argv list; return (stdout, stderr, exit code).
+
+        `command` must be a sequence of arguments, never a string: this tool
+        runs as root, and subvolume/label names come from the filesystem, so
+        a name containing spaces, quotes or `$(...)` must reach the kernel as
+        one argument instead of being re-parsed by a shell.
 
         `communicate()` must be the first blocking call on the child: it
         drains stdout and stderr concurrently.  Calling `wait()` first
         deadlocks as soon as either stream fills its pipe buffer, which is
         plausible for `btrfs sub list` on a large tree or for `df`.
         """
-        if self.DB: print('DB: +', command)
+        if isinstance(command, str):
+            raise TypeError('command must be an argv sequence, not a string')
+        command = [str(part) for part in command]
+        if self.DB: print('DB: +', shlex.join(command))
         process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, shell=True)
+                           stderr=subprocess.PIPE, cwd=cwd)
         output, err = process.communicate()
         output = output.decode('utf-8', errors='replace')
         err = err.decode('utf-8', errors='replace')
@@ -672,11 +681,12 @@ class BTRFS:
         """
         if self.dev_records:
             return self.dev_records
-        out, _, code = self._slurp_command(f'lsblk -P -o {self.LSBLK_FIELDS}')
+        out, _, code = self._slurp_command(
+            ['lsblk', '-P', '-o', self.LSBLK_FIELDS])
         if code == 0 and out:
             self.dev_records = [self.parse_lsblk_line(line) for line in out]
         else:
-            out, _, _ = self._slurp_command('blkid')
+            out, _, _ = self._slurp_command(['blkid'])
             self.dev_records = [self.parse_blkid_line(line) for line in out]
         return self.dev_records
 
@@ -693,7 +703,7 @@ class BTRFS:
                     dev=dev,
                     device_path=rec.get('PATH') or self.dev_path(dev),
                     label=rec.get('LABEL', ''), uuid=rec.get('UUID', ''))
-            rows, _, _ = self._slurp_command(f'df -h {dev_ns.device_path}')
+            rows, _, _ = self._slurp_command(['df', '-h', dev_ns.device_path])
             dev_ns.diskfree = rows[1] if len(rows) >= 2 else ''
             self.devs[dev] = dev_ns
         if self.DB:
@@ -753,9 +763,8 @@ class BTRFS:
             return tmp_mount_dir
         os.makedirs(tmp_mount_dir, exist_ok=True)
         dev_node = getattr(dev_ns, 'device_path', None) or self.dev_path(dev)
-        code = os.WEXITSTATUS(os.system(
-                f'set -x; mount {dev_node} {tmp_mount_dir}'))
-        if code:
+        if subprocess.run(['mount', dev_node, tmp_mount_dir],
+                          check=False).returncode:
             return None
         dev_ns.tmp_path = tmp_mount_dir
         return tmp_mount_dir
@@ -772,7 +781,8 @@ class BTRFS:
             tmp_mount_dir = self._ensure_tmp_mount(dev)
             if tmp_mount_dir is None:
                 raise Exception(f'cannot mount {dev_ns.dev}')
-            lines, _, _ = self._slurp_command(f'btrfs sub list {tmp_mount_dir}')
+            lines, _, _ = self._slurp_command(
+                ['btrfs', 'sub', 'list', tmp_mount_dir])
             self._init_dev_subvols(dev_ns, self.parse_subvol_list(lines))
 
         if self.DB:
@@ -788,7 +798,7 @@ class BTRFS:
         for ns in self.devs.values():
             tmp_path = getattr(ns, 'tmp_path', None)
             if tmp_path and os.path.ismount(tmp_path):
-                os.system(f'set -x; umount {tmp_path}')
+                subprocess.run(['umount', tmp_path], check=False)
 
     def _load_mounts(self):
         """ Read "/proc/mounts" once per process. """
@@ -944,8 +954,20 @@ class BTRFS:
         if not dev_ns:
             return
 
-        cmd = f'cd "{dev_ns.tmp_path}" && btrfs fi du -s {self.snap_subvol.path[1:]}/*'
-        lines, _, _ = self._slurp_command(cmd)
+        # Expand the snapshot names here instead of letting a shell do it, so
+        # a name with a space or a glob character cannot change the command.
+        snap_root = self.snap_subvol.path[1:]
+        try:
+            entries = [os.path.join(snap_root, name)
+                       for name in sorted(os.listdir(
+                           os.path.join(dev_ns.tmp_path, snap_root)))
+                       if not name.startswith('.')]
+        except OSError:
+            entries = []
+        lines = []
+        if entries:
+            lines, _, _ = self._slurp_command(
+                ['btrfs', 'fi', 'du', '-s', *entries], cwd=dev_ns.tmp_path)
         for line in lines[1:]:
             total, exclusive, _, pathname = re.split(r'\s+', line.strip(), maxsplit=3)
             pathname = os.path.join('/', pathname)

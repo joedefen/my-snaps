@@ -6,7 +6,6 @@ are captured without deadlocking.
 """
 from __future__ import annotations
 
-import shlex
 import sys
 
 import pytest
@@ -23,9 +22,9 @@ def btrfs():
     return obj
 
 
-def python_command(code: str) -> str:
-    """Build a shell command that runs Python code under the test interpreter."""
-    return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
+def python_command(code: str) -> list[str]:
+    """Build an argv list that runs Python code under the test interpreter."""
+    return [sys.executable, '-c', code]
 
 
 @pytest.mark.parametrize("exit_code", [0, 1, 42])
@@ -75,8 +74,9 @@ def test_wait_is_never_called_before_communicate(btrfs, monkeypatch):
     instances = []
 
     class FakePopen:
-        def __init__(self, command, **_kwargs):
+        def __init__(self, command, **kwargs):
             self.command = command
+            self.kwargs = kwargs
             self.returncode = 0
             self.calls = []
             instances.append(self)
@@ -91,12 +91,59 @@ def test_wait_is_never_called_before_communicate(btrfs, monkeypatch):
 
     monkeypatch.setattr(main_module.subprocess, 'Popen', FakePopen)
 
-    out, err, code = btrfs._slurp_command('btrfs sub list /tmp/.btrfs/sda1')
+    out, err, code = btrfs._slurp_command(
+        ['btrfs', 'sub', 'list', '/tmp/.btrfs/sda1'])
 
     assert instances[0].calls == ['communicate']
+    assert instances[0].command == ['btrfs', 'sub', 'list', '/tmp/.btrfs/sda1']
+    # No shell: the argv list is executed directly.
+    assert 'shell' not in instances[0].kwargs
     assert out == ['out']
     assert err == ['err']
     assert code == 0
+
+
+def test_string_commands_are_rejected(btrfs):
+    """A command string would need a shell; interpolated names would be unsafe."""
+    with pytest.raises(TypeError):
+        btrfs._slurp_command('btrfs sub list /tmp/.btrfs/sda1')
+
+
+def test_arguments_with_spaces_and_metacharacters_reach_the_child_intact(btrfs):
+    """A subvolume name is data, never shell syntax.
+
+    The old shell-based implementation would word-split this argument and
+    even run the `$(...)`; an argv list must pass it through unchanged.
+    """
+    name = 'my snap; touch /tmp/pwned $(id) "quoted"'
+    out, err, code = btrfs._slurp_command(
+        [sys.executable, '-c', 'import sys; print(sys.argv[1])', name])
+
+    assert code == 0
+    assert err == []
+    assert out == [name]
+
+
+def test_cwd_is_forwarded(btrfs, monkeypatch, tmp_path):
+    """Commands may need a working directory (e.g. `btrfs fi du`)."""
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            seen['command'] = command
+            seen['cwd'] = kwargs.get('cwd')
+            self.returncode = 0
+
+        def communicate(self):
+            return b'', b''
+
+    monkeypatch.setattr(main_module.subprocess, 'Popen', FakePopen)
+
+    btrfs._slurp_command(['btrfs', 'fi', 'du', '-s', 'name'],
+                         cwd=str(tmp_path))
+
+    assert seen['command'] == ['btrfs', 'fi', 'du', '-s', 'name']
+    assert seen['cwd'] == str(tmp_path)
 
 
 def test_non_utf8_output_does_not_raise(btrfs):
