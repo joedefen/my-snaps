@@ -37,6 +37,23 @@ from typing import ClassVar
 
 ####################################################################################
 
+# Drawing a zero-width menu prints nothing, so a non-tty (cron, a pipe,
+# pytest) must never yield a 0x0 size.
+DEFAULT_TERMINAL_SIZE = (80, 24)
+
+
+def terminal_size():
+    """ The current terminal size as a (cols, rows) named tuple.
+
+    Wrapped in a module-level function so callers and tests can substitute the
+    size without patching `shutil` itself: `shutil` is shared with every other
+    module in the process, so patching it leaks into unrelated code (pytest's
+    terminal writer calls `shutil.get_terminal_size(fallback=...)`).
+    """
+    return shutil.get_terminal_size(fallback=DEFAULT_TERMINAL_SIZE)
+
+####################################################################################
+
 class Term:
     """ Escape sequences; e.g., see:
      - https://en.wikipedia.org/wiki/ANSI_escape_code
@@ -134,7 +151,7 @@ class Menu:  # pylint: disable=too-many-instance-attributes
         self.objects = {}
         self.selected = len(prompts)
         self.title = title
-        self.cols, self.rows = shutil.get_terminal_size()
+        self.cols, self.rows = terminal_size()
         self.max_line = 0
         # time.sleep(10)
         self.pos = 0
@@ -257,7 +274,7 @@ class Menu:  # pylint: disable=too-many-instance-attributes
                 raise caught
 
             reset_timeout_handling()
-            cols, rows = shutil.get_terminal_size()
+            cols, rows = terminal_size()
             if self.cols != cols or self.rows != rows:
                 self.cols, self.rows = cols, rows
                 # self._bottom_line(f'resize: rows={self.rows}, cols={self.cols}')

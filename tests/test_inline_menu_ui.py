@@ -13,14 +13,50 @@ import pytest
 from my_snaps.InlineMenu import Menu, Term
 
 
+def fake_terminal_size(monkeypatch, cols=80, rows=24):
+    """ Pin the menu's terminal size.
+
+    Patch `InlineMenu.terminal_size()` rather than
+    `inline.shutil.get_terminal_size`: `inline.shutil` *is* the `shutil`
+    module, so patching it changes every caller in the process, including
+    pytest's own terminal writer, which calls it as
+    `shutil.get_terminal_size(fallback=...)` while reporting progress.
+    """
+    monkeypatch.setattr(inline, 'terminal_size',
+                        lambda: os.terminal_size((cols, rows)))
+
+
+def fake_alarm(monkeypatch):
+    """ Replace the menu's `signal` binding with an alarm-free stub. """
+    monkeypatch.setattr(inline, 'signal', SimpleNamespace(
+        SIGALRM=1,
+        ITIMER_REAL=2,
+        SIG_IGN='IGN',
+        signal=lambda *_a: None,
+        setitimer=lambda *_a: None))
+
+
 def make_menu(monkeypatch, prompts, default=None, title=''):
-    monkeypatch.setattr(inline.shutil, 'get_terminal_size',
-                        lambda: os.terminal_size((80, 24)))
+    fake_terminal_size(monkeypatch)
     monkeypatch.setattr(Menu, '_refresh', lambda _self, clear=True: None)
     return Menu(prompts, default, title)
 
 
 # --- escape sequences ------------------------------------------------------
+
+def test_terminal_size_always_passes_a_fallback(monkeypatch):
+    seen = {}
+
+    def fake_get_terminal_size(*_args, fallback=None, **_kwargs):
+        seen['fallback'] = fallback
+        return os.terminal_size(fallback)
+
+    monkeypatch.setattr(inline, 'shutil', SimpleNamespace(
+        get_terminal_size=fake_get_terminal_size))
+
+    assert inline.terminal_size() == os.terminal_size((80, 24))
+    assert seen['fallback'] == inline.DEFAULT_TERMINAL_SIZE
+
 
 def test_term_sequences():
     assert Term.erase_line() == '\x1b[2K'
@@ -228,11 +264,12 @@ def test_prompt_mode_saves_and_restores_termios(monkeypatch):
     calls = []
     monkeypatch.setattr(Menu, 'save_attrs', None)
     monkeypatch.setattr(Menu, '_fd', staticmethod(lambda: 3))
-    monkeypatch.setattr(inline.termios, 'tcgetattr', lambda fd: ['attrs', fd])
-    monkeypatch.setattr(inline.tty, 'setcbreak',
-                        lambda fd: calls.append(('cbreak', fd)))
-    monkeypatch.setattr(inline.termios, 'tcsetattr',
-                        lambda *args: calls.append(('restore', args)))
+    monkeypatch.setattr(inline, 'termios', SimpleNamespace(
+        TCSADRAIN='TCSADRAIN',
+        tcgetattr=lambda fd: ['attrs', fd],
+        tcsetattr=lambda *args: calls.append(('restore', args))))
+    monkeypatch.setattr(inline, 'tty', SimpleNamespace(
+        setcbreak=lambda fd: calls.append(('cbreak', fd))))
 
     Menu._prompt_mode(enable=True)
     assert Menu.save_attrs == ['attrs', 3]
@@ -249,10 +286,8 @@ def test_prompt_mode_saves_and_restores_termios(monkeypatch):
 def test_get_char_returns_a_character(monkeypatch):
     menu = Menu.__new__(Menu)
     menu.cols, menu.rows = 80, 24
-    monkeypatch.setattr(inline.signal, 'signal', lambda *_a: None)
-    monkeypatch.setattr(inline.signal, 'setitimer', lambda *_a: None)
-    monkeypatch.setattr(inline.shutil, 'get_terminal_size',
-                        lambda: os.terminal_size((80, 24)))
+    fake_alarm(monkeypatch)
+    fake_terminal_size(monkeypatch)
     monkeypatch.setattr(inline.sys.stdin, 'read', lambda _n: 'a')
 
     assert menu._get_char() == 'a'
@@ -269,10 +304,8 @@ def test_get_char_survives_a_timeout(monkeypatch):
             raise Menu.InputTimeout
         return 'b'
 
-    monkeypatch.setattr(inline.signal, 'signal', lambda *_a: None)
-    monkeypatch.setattr(inline.signal, 'setitimer', lambda *_a: None)
-    monkeypatch.setattr(inline.shutil, 'get_terminal_size',
-                        lambda: os.terminal_size((80, 24)))
+    fake_alarm(monkeypatch)
+    fake_terminal_size(monkeypatch)
     monkeypatch.setattr(inline.sys.stdin, 'read', read)
 
     assert menu._get_char() == 'b'
@@ -287,10 +320,8 @@ def test_get_char_redraws_after_a_resize(monkeypatch):
                         lambda: redrawn.append('bottom'))
     monkeypatch.setattr(menu, '_refresh',
                         lambda: redrawn.append('refresh'))
-    monkeypatch.setattr(inline.signal, 'signal', lambda *_a: None)
-    monkeypatch.setattr(inline.signal, 'setitimer', lambda *_a: None)
-    monkeypatch.setattr(inline.shutil, 'get_terminal_size',
-                        lambda: os.terminal_size((100, 30)))
+    fake_alarm(monkeypatch)
+    fake_terminal_size(monkeypatch, cols=100, rows=30)
     monkeypatch.setattr(inline.sys.stdin, 'read', lambda _n: 'a')
 
     assert menu._get_char() == 'a'
