@@ -33,12 +33,12 @@ Keep it as a **personal, opinionated tool**. No correctness or safety defect rem
 ## Keep or not
 
 **Keep it if:**
-- The primary use matches the assumptions (mounted `/.snapshots`, no dots in top-level names, labeled filesystems).
-- The simple model and the systemd-boot/pacman/dracut workaround are worth more than a generalized tool.
+- The expected BTRFS layout is present (mounted `/.snapshots`, no dots in top-level names).
+- The simple model and the optional `.efi-back` workaround are worth more than a generalized tool.
 - Finishing the release tag and changelog is acceptable.
 
 **Do not keep it as a public/general-purpose project unless taking on:**
-- Portability across unlabeled BTRFS and non-systemd-boot setups.
+- Broader distro and bootloader coverage; only the `.efi-back` step is layout-specific (systemd-boot + pacman + dracut), and unlabeled filesystems are supported but lightly exercised.
 - Ongoing tests, CI, tags, changelog, docs, and support.
 - The trust bar for a root tool that deletes subvolumes.
 

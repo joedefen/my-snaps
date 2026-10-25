@@ -16,11 +16,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-    # Range, not an exact pin: the dependency published 31 releases in about
-    # 26 hours, and an exact pin makes every install a potential resolution
-    # failure. The floor is the first release with the inline-editor caret
-    # support this package uses.
-    "console-window >= 2.0.0.10, <3",
+    "console-window==2.0.1"
 ]
 keywords = ["BTRFS", "snapshot", "restore", "balance", ]
 # No `License ::` classifier: PEP 639 deprecates it in favour of the SPDX

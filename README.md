@@ -21,6 +21,9 @@
   * `{subvolume}.{date-string}`
   * `{subvolume}.{date-string}={label}`
 * Your snapshots must reside in a top-level subvolume whose name ends with `@snapshots`; for `my-snaps` it must be mounted at `/.snapshots`.
+* Any bootloader is acceptable. The [Special Behavior for BTRFS + Systemd-boot + pacman + dracut](#special-behavior-for-btrfs--systemd-boot--pacman--dracut) workaround applies only to that layout.
+* Each mounted top-level subvolume is snapshotted and restored independently. Whether `/var`, `/home`, and similar directories live in the root subvolume or in their own subvolumes is a layout choice; a separate subvolume must be snapshotted and restored on its own.
+* BTRFS snapshots do not include nested subvolumes; see [Choosing what to snapshot](#choosing-what-to-snapshot) for the layout implications.
 * Labels define sets of snapshots that are independently managed.
   * **note**: the label (and any custom text after the timestamp) cannot contain "." or "/"
   * Suggested labels:
@@ -158,6 +161,16 @@ python -m pytest
 * BTW, the above complementary strategies have even more value if you have multiple installs (e.g., a desktop, a 24/7 server, and a few laptops all running similarly with the same apps and basic config).
 * For more comprehensive protection, consider `snapper`, `btrbk`, `btrfsmaintenance`, and google for others.
 
+### Choosing what to snapshot
+
+The layout decides what a restore rewinds, because `my-snaps` targets mounted top-level subvolumes:
+
+* Snapshot subvolumes whose state should roll back with the system: normally the root subvolume, plus `/var` when it is separate and holds package or service state (on Debian, `/var/lib/dpkg` and `/var/lib/apt`).
+* In the Fedora Silverblue/CoreOS model, `/var` is a separate subvolume that survives OS deployments, so it is outside the rollback boundary. That makes it "not rolled back," not disposable: `/var/lib/rpm`, `/var/lib/dnf`, `/var/lib/systemd`, and service state still matter.
+* Snapshot `/home`, VM images, container storage, and similar large state separately, or not at all, depending on whether a root restore should rewind them.
+* `/var/cache`, `/var/tmp`, and old logs are the genuinely disposable parts.
+* Keep separately mounted subvolumes at the top level; a nested subvolume is not included in its parent's snapshot and moves when the parent is renamed.
+
 ---
 
 ## Special Behavior for BTRFS + Systemd-boot + pacman + dracut
@@ -189,8 +202,11 @@ rsync -a -H --delete "<snapshot>/.efi-back/" "/efi/"
 ```
 The mirror is authoritative: entries that are not in the backup are removed
 from /efi, so the restored root's kernels and boot entries are exactly what the
-ESP advertises. It only runs when /efi is the mounted ESP and the backup is not
-empty, so an incomplete snapshot cannot empty the boot partition.
+ESP advertises. It only runs when all of these hold:
+* the subvolume being restored is the root subvolume, and its snapshot contains a non-empty `.efi-back`;
+* `/efi` is a mount point on the running (or live) system, and it is the ESP rather than another BTRFS subvolume.
+
+Otherwise the mirror is skipped, so an incomplete snapshot or a `/efi` that is not the ESP cannot empty the wrong tree. Systems whose ESP is mounted elsewhere (e.g., `/boot/efi` on Debian/GRUB) do not use this workaround.
 
 -- 
 
