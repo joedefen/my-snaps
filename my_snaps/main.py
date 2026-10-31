@@ -152,7 +152,7 @@ HELP_ACTION_LINES = (
     ' u - gather disk usage (slow; asks first)',
     ' f - freshen device and mount discovery',
     ' T - colour theme picker (t cycles, ESC returns)',
-    ' x - exit',
+    ' q - quit program',
 )
 
 
@@ -487,7 +487,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         spin = self.spin = OptionSpinner(stack=self.ss)
         # Action keys are scoped by the screen that implements their
         # *_ACTION method, so 's' does nothing while Help is showing.
-        spin.add_key('quit', 'x - quit program', genre='action', keys='x')
+        spin.add_key('quit', 'q - quit program', genre='action', keys='q')
         spin.add_key('help', '? - help screen', genre='action', keys='?')
         spin.add_key('snap', 's - snapshot highlighted item',
                      genre='action', keys='s')
@@ -1556,7 +1556,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         widths = (mounts_width, devs_width, path_width)
 
         win.add_fancy_header('MY-SNAPS  [s]:+snap [d]:-subvol [r]eplace-all'
-             + ' [a]dd-all [u]sage [f]reshen [T]heme [x]:exit [?]:help',
+             + ' [a]dd-all [u]sage [f]reshen [q]uit [?]:help',
             mode='Underline')
         for dev_ns in self.devs.values():
             win.add_header(f'df: {dev_ns.diskfree}', attr=cs.A_DIM)

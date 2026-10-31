@@ -65,6 +65,8 @@ See the Quick Start. After install, run some tests per "Initial and Regression T
 * `u`: to gather disk usage (asks first; this can take quite a while and is not perfect)
 * `f`: to freshen device and mount discovery (e.g., after plugging in a disk); the listing also refreshes automatically after a minute idle
 * `?`: to get help on all keys and navigation
+* `q`: to quit the program (the header legend names the keys and omits the
+  theme picker, which is described here and under `?`)
 * `T`: opens the colour-theme picker (`t` cycles, ESC returns). Colour is
   decoration: mounted subvolume rows use the theme's HOTSWAP role,
   unmounted ones use WARNING, unmounted `=Reverted` leftovers use SUCCESS

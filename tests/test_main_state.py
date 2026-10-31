@@ -566,7 +566,8 @@ def test_init_ui_builds_the_window_stack_and_bindings(monkeypatch):
     assert self.ss.curr.num == main_module.HOME_ST
     # The action keys are what the window forwards from prompt().
     assert ord('s') in self.win.handled_keys
-    assert ord('x') in self.win.handled_keys
+    assert ord('q') in self.win.handled_keys
+    assert ord('x') not in self.win.handled_keys
 
 
 # --- inline prompt plumbing -------------------------------------------------
@@ -1206,6 +1207,21 @@ def row_attr(monkeypatch, path, mount):
 ])
 def test_row_roles_follow_the_mount_state(monkeypatch, path, mount, expected):
     assert row_attr(monkeypatch, path, mount) == expected
+
+
+def test_header_legend_drops_the_theme_key_and_names_q_for_quit():
+    win = FakeWin()
+    self = make_btrfs(win=win)
+    self._refresh_if_dirty = lambda: None
+
+    self.refresh_info()
+
+    legend = win.fancy[0]
+    # The theme picker is still available, but it is not advertised here: it
+    # belongs with the other explanatory text behind `?`.
+    assert '[T]heme' not in legend
+    assert '[q]uit' in legend
+    assert '[x]:exit' not in legend
 
 
 def test_refresh_info_renders_a_transient_body():
