@@ -65,6 +65,14 @@ See the Quick Start. After install, run some tests per "Initial and Regression T
 * `u`: to gather disk usage (asks first; this can take quite a while and is not perfect)
 * `f`: to freshen device and mount discovery (e.g., after plugging in a disk); the listing also refreshes automatically after a minute idle
 * `?`: to get help on all keys and navigation
+* `T`: opens the colour-theme picker (`t` cycles, ESC returns). Colour is
+  decoration: mounted subvolume rows use the theme's HOTSWAP role,
+  unmounted ones use WARNING, unmounted `=Reverted` leftovers use SUCCESS
+  (a finished restore), and confirmation prompts use DANGER, while the `~`,
+  `-->` and `!!!` markers keep the same meaning on a monochrome terminal.
+  Start on a named theme with
+  `--theme NAME`, or disable colour with `--no-color` (`--theme mono`, or a
+  non-empty `NO_COLOR` also work).
 
 **NOTE**: actions often require confirmation to ensure accidental keystrokes do not clobber your system. The listing itself is read-only; only snapshot or delete actions mount a filesystem writable.
 

@@ -11,7 +11,7 @@ from unittest.mock import mock_open
 
 import my_snaps.main as main_module
 import pytest
-from console_window import InlineConfirmation
+from console_window import InlineConfirmation, Theme
 from my_snaps.main import BTRFS, DEFAULT_KEEP_SNAPS, BTRFSError
 
 
@@ -20,6 +20,9 @@ class FakeWin:
 
     def __init__(self, pick_pos=0):
         self.pick_pos = pick_pos
+        # ScreenStack saves/restores these on a push/pop.
+        self.scroll_pos = 0
+        self.free_scroll = False
         self.passthrough_mode = False
         self.handled_keys = set()
         self.alerts = []
@@ -78,7 +81,6 @@ def make_btrfs(**overrides):
         'add_limit': 0,
         'keep': DEFAULT_KEEP_SNAPS,
         'label': None,
-        'help_mode': False,
         'win': None,
         'rows': [],
         'dirty': False,
@@ -86,6 +88,11 @@ def make_btrfs(**overrides):
         'show_progress': False,
         'dev_fingerprint': None,
         'mount_fingerprint': None,
+        'appearance_theme': '',
+        'appearance_colors': True,
+        'screens': {},
+        'ss': None,
+        'spin': None,
         'confirm': InlineConfirmation(),
         '_confirm_prompt': '',
         '_confirm_labels': '',
@@ -307,157 +314,259 @@ def test_cur_snap_suffix_and_stop_curses():
     self.stop_curses()
 
 
-# --- key routing ------------------------------------------------------------
+# --- screen actions ---------------------------------------------------------
 
-class Spin:
-    def do_key(self, _key, _win):
-        return 'value'
-
-
-def test_handle_key_gives_every_key_to_an_active_prompt(monkeypatch):
+def test_home_screen_actions_delegate_to_the_model(monkeypatch):
     self = make_btrfs(win=FakeWin())
-    self.confirm.start(mode='y')
-    seen = []
-    monkeypatch.setattr(self, 'handle_confirm_key', seen.append)
-
-    assert self._handle_key(ord('a'), Spin(), self.win) is None
-    assert seen == [ord('a')]
-
-
-def test_handle_key_polls_on_the_idle_timeout(monkeypatch):
-    self = make_btrfs(win=FakeWin())
+    screen = main_module.HomeScreen(self)
     calls = []
-    monkeypatch.setattr(self, '_poll_device_changes', lambda: calls.append(1))
+    for name in ('_create_snap', '_del_subvolume', '_confirm_disk_usage'):
+        monkeypatch.setattr(
+            self, name, lambda *_a, _n=name, **_k: calls.append(_n))
+    replaced = []
+    monkeypatch.setattr(
+        self, '_replace_eldest_snaps',
+        lambda *_a, **kwargs: replaced.append(kwargs))
 
-    assert self._handle_key(None, Spin(), self.win) is None
-    assert calls == [1]
+    screen.snap_ACTION()
+    screen.delete_ACTION()
+    screen.usage_ACTION()
+    screen.replace_ACTION()
+    screen.add_ACTION()
+
+    assert calls == ['_create_snap', '_del_subvolume', '_confirm_disk_usage']
+    assert replaced == [{}, {'just_add': True}]
 
 
-@pytest.mark.parametrize('key,method', [
-    (ord('u'), '_confirm_disk_usage'),
-    (ord('r'), '_replace_eldest_snaps'),
-    (ord('a'), '_replace_eldest_snaps'),
-    (ord('s'), '_create_snap'),
-    (ord('d'), '_del_subvolume'),
-])
-def test_handle_key_routes_action_keys(monkeypatch, key, method):
+def test_freshen_action_marks_the_model_dirty():
     self = make_btrfs(win=FakeWin())
-    calls = []
-    monkeypatch.setattr(self, method, lambda *_a, **_k: calls.append(key))
 
-    assert self._handle_key(key, Spin(), self.win) == 'value'
-    assert calls == [key]
+    main_module.HomeScreen(self).freshen_ACTION()
 
-
-def test_handle_key_freshens_and_reports_unknown_keys():
-    self = make_btrfs(win=FakeWin())
-    assert self._handle_key(ord('f'), Spin(), self.win) == 'value'
     assert self.dirty is True
 
-    assert self._handle_key(ord('n'), Spin(), self.win) == 'value'
-    assert self.win.alerts == [('Info', 'got: value')]
 
-
-def test_handle_key_exits(monkeypatch):
+def test_quit_action_stops_curses_and_exits(capsys):
     self = make_btrfs(win=FakeWin())
 
     with pytest.raises(SystemExit) as caught:
-        self._handle_key(ord('x'), Spin(), self.win)
-
-    assert caught.value.code == 0
-    assert self.win.stopped is True
-
-
-def test_handle_key_closes_help_on_enter():
-    self = make_btrfs(win=FakeWin(), help_mode=True)
-
-    self._handle_key(cs.KEY_ENTER, Spin(), self.win)
-
-    assert self.help_mode is False
-    assert self.win.pick_mode is False
-
-
-# --- window loop ------------------------------------------------------------
-
-def install_fake_window(monkeypatch, window_class):
-    monkeypatch.setattr(main_module, 'ConsoleWindow', window_class)
-    monkeypatch.setattr(main_module, 'OptionSpinner', FakeSpinner)
-
-
-class FakeSpinner:
-    def __init__(self):
-        self.keys = ['help_mode']
-
-    def add_key(self, *_args, **_kwargs):
-        pass
-
-    def do_key(self, _key, _win):
-        return 'value'
-
-    def show_help_nav_keys(self, win):
-        win.help_nav = True
-
-    def show_help_body(self, win):
-        win.help_body = True
-
-
-def test_start_window_exits_on_x(monkeypatch, capsys):
-    class Window(FakeWin):
-        def __init__(self, opts=None):
-            super().__init__()
-            self.keys = [ord('x')]
-
-    install_fake_window(monkeypatch, Window)
-    self = make_btrfs()
-    monkeypatch.setattr(self, 'refresh_info', lambda: None)
-
-    with pytest.raises(SystemExit) as caught:
-        self._start_window()
+        main_module.MySnapsScreen(self).quit_ACTION()
 
     assert caught.value.code == 0
     assert self.win.stopped is True
     assert 'QUITTING NOW' in capsys.readouterr().out
 
 
-def test_start_window_draws_help_then_exits(monkeypatch):
-    class Window(FakeWin):
-        def __init__(self, opts=None):
-            super().__init__()
-            self.keys = [cs.KEY_ENTER, ord('x')]
+def test_help_and_theme_actions_push_their_screens():
+    self = make_btrfs(win=FakeWin())
+    pushed = []
+    self.ss = SimpleNamespace(
+        push=lambda num, pos: pushed.append((num, pos)))
+    screen = main_module.MySnapsScreen(self)
 
-    install_fake_window(monkeypatch, Window)
-    self = make_btrfs(help_mode=True)
-    refreshed = []
-    monkeypatch.setattr(self, 'refresh_info',
-                        lambda: refreshed.append('refresh'))
+    screen.help_ACTION()
+    screen.theme_screen_ACTION()
+
+    assert pushed == [(main_module.HELP_ST, 0),
+                      (main_module.THEMES_ST, 0)]
+
+
+# --- window loop ------------------------------------------------------------
+
+class LoopWindow(FakeWin):
+    def __init__(self, keys):
+        super().__init__()
+        self.keys = list(keys)
+        self.renders = 0
+
+    def render(self):
+        self.renders += 1
+
+
+class LoopStack:
+    """Minimal ScreenStack: one key is enough to leave the loop."""
+
+    def __init__(self, curr_num=main_module.HOME_ST):
+        self.curr = SimpleNamespace(num=curr_num)
+        self.performed = []
+
+    def perform_actions(self, spin):
+        self.performed.append(spin)
+        raise SystemExit(0)
+
+
+class LoopSpin:
+    def __init__(self):
+        self.seen = []
+
+    def do_key(self, key, win):
+        self.seen.append(key)
+        return key
+
+
+def make_loop_btrfs(win, drawn):
+    self = make_btrfs(win=win)
+    self.screens = {main_module.HOME_ST: SimpleNamespace(
+        draw_screen=lambda: drawn.append('draw'))}
+    self.ss = LoopStack()
+    self.spin = LoopSpin()
+    return self
+
+
+def test_main_loop_draws_then_dispatches_and_exits():
+    drawn = []
+    self = make_loop_btrfs(LoopWindow([ord('x')]), drawn)
+
+    with pytest.raises(SystemExit) as caught:
+        self._main_loop()
+
+    assert caught.value.code == 0
+    assert drawn == ['draw']
+    assert self.win.renders == 1
+    assert self.ss.performed == [self.spin]
+    assert self.spin.seen == [ord('x')]
+
+
+def test_main_loop_polls_devices_on_the_idle_timeout(monkeypatch):
+    drawn = []
+    self = make_loop_btrfs(LoopWindow([None, ord('x')]), drawn)
+    polled = []
+    monkeypatch.setattr(
+        self, '_poll_device_changes', lambda: polled.append(1))
 
     with pytest.raises(SystemExit):
-        self._start_window()
+        self._main_loop()
 
-    assert self.win.help_nav is True
-    assert self.win.help_body is True
-    assert refreshed == ['refresh']
+    assert polled == [1]
+    assert self.spin.seen == [ord('x')]
+    assert drawn == ['draw', 'draw']
 
 
-def test_start_window_reports_an_exception_and_restores_the_terminal(
-        monkeypatch, capsys):
+def test_main_loop_gives_every_key_to_an_active_prompt(monkeypatch):
+    drawn = []
+    self = make_loop_btrfs(LoopWindow([ord('a')]), drawn)
+    self.confirm.start(mode='y')
+    seen = []
+
+    def handle(key):
+        seen.append(key)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(self, 'handle_confirm_key', handle)
+
+    with pytest.raises(SystemExit):
+        self._main_loop()
+
+    assert seen == [ord('a')]
+    assert self.spin.seen == []
+
+
+def test_main_loop_reports_an_exception_and_restores_the_terminal(capsys):
     class Window(FakeWin):
-        def __init__(self, opts=None):
-            super().__init__()
-
         def prompt(self, seconds=0):
             raise RuntimeError('boom')
 
-    install_fake_window(monkeypatch, Window)
-    self = make_btrfs()
-    monkeypatch.setattr(self, 'refresh_info', lambda: None)
+    self = make_btrfs(win=Window())
+    self.screens = {main_module.HOME_ST: SimpleNamespace(
+        draw_screen=lambda: None)}
+    self.ss = SimpleNamespace(curr=SimpleNamespace(num=main_module.HOME_ST))
 
     with pytest.raises(SystemExit) as caught:
-        self._start_window()
+        self._main_loop()
 
     assert caught.value.code == 15
     assert self.win.stopped is True
     assert 'exception: boom' in capsys.readouterr().out
+
+
+def test_start_window_builds_the_ui_then_runs_the_loop(monkeypatch):
+    self = make_btrfs()
+    calls = []
+    monkeypatch.setattr(self, '_init_ui', lambda: calls.append('init'))
+    monkeypatch.setattr(self, '_main_loop', lambda: calls.append('loop'))
+
+    self._start_window()
+
+    assert calls == ['init', 'loop']
+
+
+def test_init_ui_records_mono_when_colour_is_off(monkeypatch):
+    class Window(FakeWin):
+        def __init__(self, opts=None):
+            super().__init__()
+            self.opts = opts
+            self.theme = 'default'
+
+        def set_handled_keys(self, spin):
+            pass
+
+    monkeypatch.setattr(main_module, 'ConsoleWindow', Window)
+    self = make_btrfs()
+    self.appearance_colors = False
+
+    self._init_ui()
+
+    assert self.win.theme == main_module.MONO_THEME
+
+
+def test_apply_appearance_mono_turns_colour_off(monkeypatch):
+    class Window(FakeWin):
+        def set_theme(self, name):
+            self.theme = name
+            return True
+
+    win = Window()
+    win.theme = 'default'
+    self = make_btrfs(win=win)
+    try:
+        self.apply_appearance(main_module.MONO_THEME)
+
+        assert self.appearance_colors is False
+        assert self.appearance_theme == ''
+        assert self.win.theme == main_module.MONO_THEME
+    finally:
+        main_module.set_colors_enabled(True)
+
+
+def test_cycle_appearance_advances_the_picker(monkeypatch):
+    self = make_btrfs(win=FakeWin())
+    applied = []
+    monkeypatch.setattr(
+        self, 'apply_appearance', lambda name: applied.append(name))
+    self.appearance_theme = 'default'
+    self.appearance_colors = True
+
+    choices = self.appearance_choices()
+    expected = choices[(choices.index('default') + 1) % len(choices)]
+
+    self.cycle_appearance()
+
+    assert applied == [expected]
+
+
+def test_init_ui_builds_the_window_stack_and_bindings(monkeypatch):
+    class Window(FakeWin):
+        def __init__(self, opts=None):
+            super().__init__()
+            self.opts = opts
+            self.handled_keys = set()
+
+        def set_handled_keys(self, spin):
+            self.handled_keys = set(spin.keys)
+
+    monkeypatch.setattr(main_module, 'ConsoleWindow', Window)
+    self = make_btrfs()
+
+    self._init_ui()
+
+    assert self.win.opts.theme == 'default'
+    assert set(self.screens) == {
+        main_module.HOME_ST, main_module.HELP_ST, main_module.THEMES_ST}
+    assert self.ss.screen_objects is self.screens
+    assert self.ss.curr.num == main_module.HOME_ST
+    # The action keys are what the window forwards from prompt().
+    assert ord('s') in self.win.handled_keys
+    assert ord('x') in self.win.handled_keys
 
 
 # --- inline prompt plumbing -------------------------------------------------
@@ -1046,6 +1155,57 @@ def test_add_row_handles_snapshots_and_regular_subvolumes():
 
     assert any('--> @root.1=Daily 1d0h' in line for line, _attr in win.body)
     assert any('!!! orphan' in line for line, _attr in win.body)
+
+
+def test_non_snapshot_rows_get_the_hotswap_role(monkeypatch):
+    win = FakeWin()
+    self = make_btrfs(win=win)
+    monkeypatch.setattr(main_module, 'semantic_attr', lambda _role: 41)
+    self.snap_subvol = make_subvol('/@snapshots')
+    snap = make_subvol('/@snapshots/@root.1=Daily')
+    snap.snap_of = make_subvol('/@root')
+    regular = make_subvol('/@home')
+    regular.mount = '/home'
+    widths = (5, 4, 30)
+
+    self._add_row(win, SimpleNamespace(path=regular.path, mount='/home',
+                                      dev='sda1', size=None,
+                                      subvol_ns=regular), widths, False)
+    self._add_row(win, SimpleNamespace(path=snap.path, mount='', dev='sda1',
+                                      size=None, subvol_ns=snap), widths,
+                  False)
+
+    assert win.body[0][1] == 41
+    assert win.body[1][1] is None
+
+
+ROLE_ATTRS = {Theme.DANGER: 41, Theme.SUCCESS: 42,
+              Theme.WARNING: 43, Theme.HOTSWAP: 44}
+
+
+def row_attr(monkeypatch, path, mount):
+    """ Render one row and return the attribute `_row_attr()` gave it. """
+    win = FakeWin()
+    self = make_btrfs(win=win)
+    monkeypatch.setattr(main_module, 'semantic_attr',
+                        lambda role: ROLE_ATTRS.get(role, 45))
+    ns = make_subvol(path)
+    ns.mount = mount
+    self._add_row(win, SimpleNamespace(path=path, mount=mount, dev='sda1',
+                                       size=None, subvol_ns=ns), (5, 4, 30),
+                  False)
+    return win.body[0][1]
+
+
+@pytest.mark.parametrize('path,mount,expected', [
+    ('/@root.2024-01-14-101010=Reverted', '', ROLE_ATTRS[Theme.SUCCESS]),
+    ('/@root.2024-01-14-101010=Reverted', '/', ROLE_ATTRS[Theme.HOTSWAP]),
+    ('/@home', '/home', ROLE_ATTRS[Theme.HOTSWAP]),
+    ('/@home', '', ROLE_ATTRS[Theme.WARNING]),
+    ('/@optToDel', '', ROLE_ATTRS[Theme.WARNING]),
+])
+def test_row_roles_follow_the_mount_state(monkeypatch, path, mount, expected):
+    assert row_attr(monkeypatch, path, mount) == expected
 
 
 def test_refresh_info_renders_a_transient_body():

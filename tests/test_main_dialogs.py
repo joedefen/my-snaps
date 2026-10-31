@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 from console_window import InlineConfirmation
+from my_snaps import main as main_module
 from my_snaps.main import BTRFS, DEFAULT_KEEP_SNAPS
 
 
@@ -268,6 +269,17 @@ def test_confirm_line_text_mode_shows_the_typed_buffer_and_caret():
     assert line.index('ENTER') < line.index('.2026-10-24')
     assert line.endswith('│')
     assert '.2026-10-24│' in line
+
+
+def test_confirmation_text_uses_the_danger_role(monkeypatch):
+    self = make_btrfs(FakeWin())
+    monkeypatch.setattr(main_module, 'semantic_attr', lambda _role: 41)
+    self._begin_confirm('Delete "/@root"', mode='y')
+
+    line = self._confirm_lines()[0]
+
+    assert line[0].lstrip().startswith('⚠️')
+    assert line[1] == cs.A_BOLD | 41
 
 
 def test_inline_prompt_uses_passthrough_and_leaves_handled_keys_alone():

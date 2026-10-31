@@ -10,7 +10,11 @@ starting the window.
 # This module is the TUI plus its device/mount bookkeeping.  It is long because
 # those concerns share one live state machine; keep new behaviour in small
 # helpers instead of growing `_start_window()` or `refresh_info()`.
-# pylint: disable=too-many-lines
+#
+# `*_ACTION` is console-window's screen dispatch convention, and a Screen is a
+# deliberate collaborator of the model it draws, so the naming and private
+# method access are intentional rather than accidents.
+# pylint: disable=too-many-lines,invalid-name,protected-access
 
 import argparse
 import atexit
@@ -23,9 +27,31 @@ import sys
 import traceback
 from types import SimpleNamespace
 
-from console_window import ConsoleWindow, ConsoleWindowOpts, InlineConfirmation, OptionSpinner
+from console_window import (
+    BasicHelpScreen,
+    ConsoleWindow,
+    ConsoleWindowOpts,
+    InlineConfirmation,
+    OptionSpinner,
+    Screen,
+    ScreenStack,
+    Theme,
+)
 
+from my_snaps.Appearance import (
+    MONO_THEME,
+    appearance_choices,
+    appearance_label,
+    resolve_ui_prefs,
+    semantic_attr,
+    set_colors_enabled,
+)
 from my_snaps.MyUtils import ago_whence, human, reexec_as_root, timestamp_str, version_string
+
+# Screen numbers and names used by the ScreenStack.  HOME is the listing; HELP
+# explains the keys; THEMES is console-window's generic colour picker.
+HOME_ST, HELP_ST, THEMES_ST = 0, 1, 2
+SCREENS = ['HOME', 'HELP', 'THEMES']
 
 # `a` (add-all) keeps at most this many snapshots of one label per subvolume
 # in the TUI.  It is a convenience default, not a hard limit: `-k/--keep`
@@ -38,6 +64,12 @@ DEFAULT_KEEP_SNAPS = 8
 # remove snapshots the operator asked to keep.
 SANITY_MAX_SNAPS = 1000
 
+# The suffix `my-restore` gives the writable subvolume it moved aside.  Such a
+# leftover marks a finished restore, so the listing paints it SUCCESS -- but
+# only while nothing is mounted on it, since a mounted leftover is the hazard
+# HOTSWAP is meant to draw the eye to.
+REVERTED_TAG = '=Reverted'
+
 ##############################################################################
 
 class BTRFSError(RuntimeError):
@@ -49,6 +81,118 @@ class BTRFSError(RuntimeError):
     print just the actionable message.
     """
 
+
+##############################################################################
+# Screens: the TUI is a stack of Screen objects.  A screen draws the body and
+# owns the *_ACTION methods that the OptionSpinner dispatches by scope, so a
+# key only does something on the screen where its action is defined.
+
+class MySnapsScreen(Screen):
+    """ Base class for every my-snaps screen. """
+
+    app: 'BTRFS'  # type hint for IDEs
+
+    def quit_ACTION(self):
+        """ Leave the TUI (the terminal is restored before printing). """
+        self.win.stop_curses()
+        print('\n   OK, QUITTING NOW\n')
+        sys.exit(0)
+
+    def help_ACTION(self):
+        """ Open the help screen, remembering where the pick was. """
+        self.app.ss.push(HELP_ST, self.win.pick_pos)
+
+    def theme_screen_ACTION(self):
+        """ Open the colour-theme picker. """
+        self.app.ss.push(THEMES_ST, self.win.pick_pos)
+
+
+class HomeScreen(MySnapsScreen):
+    """ The subvolume/snapshot listing. """
+
+    def draw_screen(self):
+        self.win.set_pick_mode(True)
+        self.app.refresh_info()
+
+    def snap_ACTION(self):
+        """ `s`: create a snapshot of the highlighted subvolume. """
+        self.app._create_snap()
+
+    def delete_ACTION(self):
+        """ `d`: delete the highlighted subvolume (after confirmation). """
+        self.app._del_subvolume()
+
+    def replace_ACTION(self):
+        """ `r`: replace the eldest snapshot of each subvolume. """
+        self.app._replace_eldest_snaps()
+
+    def add_ACTION(self):
+        """ `a`: add a snapshot to each subvolume with snapshots. """
+        self.app._replace_eldest_snaps(just_add=True)
+
+    def usage_ACTION(self):
+        """ `u`: gather disk usage (slow; asks first). """
+        self.app._confirm_disk_usage()
+
+    def freshen_ACTION(self):
+        """ `f`: rebuild devices, mounts and subvolume trees on the next draw. """
+        self.app.dirty = True
+
+
+# `?` explains the keys; the spinner's own listing is the authoritative one, so
+# these lines only describe the actions in my-snaps' vocabulary.
+HELP_ACTION_LINES = (
+    'Action keys:',
+    ' s - create snapshot for highlighted item',
+    ' d - delete highlighted item',
+    ' r - replace eldest snapshot of each subvol',
+    '     (on a labeled snapshot: that label only)',
+    ' a - add snapshot to each subvol with snapshots',
+    '     (on a labeled snapshot: that label only)',
+    ' u - gather disk usage (slow; asks first)',
+    ' f - freshen device and mount discovery',
+    ' T - colour theme picker (t cycles, ESC returns)',
+    ' x - exit',
+)
+
+
+class MySnapsHelpScreen(BasicHelpScreen):
+    """ console-window's help body plus the action-key legend. """
+
+    def draw_screen(self):
+        super().draw_screen()
+        for idx, line in enumerate(HELP_ACTION_LINES):
+            self.win.add_body(
+                line, attr=cs.A_UNDERLINE if idx == 0 else None)
+
+    def escape_help_ACTION(self):
+        """ ESC/ENTER leaves help and returns to the previous screen. """
+        self.app.ss.pop()
+
+
+# console-window draws the swatches and hint line; only the cycle is overridden
+# so my-snaps' `mono` pseudo-theme is part of the rotation and follows the
+# process-wide colour switch.
+_ThemePickerScreen = Theme.create_picker_screen(
+    MySnapsScreen,
+    cycle_key='t',
+    note='The last entry, mono, uses no colour at all.',
+)
+
+
+class MySnapsThemeScreen(_ThemePickerScreen):
+    """ Theme picker over console-window's themes plus my-snaps' `mono`. """
+
+    def spin_theme_ACTION(self):
+        """ `t` advances to the next appearance (mono included). """
+        self.app.cycle_appearance()
+
+    def escape_theme_ACTION(self):
+        """ ESC returns to whichever screen opened the picker. """
+        self.app.ss.pop()
+
+
+##############################################################################
 
 class BTRFS:  # pylint: disable=too-many-instance-attributes
     """ Drive the my-snaps TUI and the non-interactive snapshot actions.
@@ -86,7 +230,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
     # `lsblk` path is rescanned on every refresh (see _scan_block_devices).
     blkid_records = None
 
-    def __init__(self, opts):
+    def __init__(self, opts):  # pylint: disable=too-many-statements
         self.tmp_dir = '/tmp/.btrfs/'
         self.temps = {} # keyed by device (e.g., /dev/nvme0n1p2)
         # Keyed by filesystem UUID (or by device name when no UUID exists),
@@ -101,9 +245,22 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         self.add_limit = opts.add_snap_max
         self.keep = opts.keep  # cap for `a` when no `-s` limit applies
         self.label = None   # one label of current interest
-        self.help_mode = False
         self.win = None
         self.rows = []
+
+        # Appearance is resolved before the window exists so the first frame is
+        # already on the chosen theme.  `--theme mono` (and --no-color/NO_COLOR)
+        # turns semantic colour into the attribute mapping in Appearance.py.
+        self.appearance_theme, self.appearance_colors = resolve_ui_prefs(
+            getattr(opts, 'theme', None), getattr(opts, 'no_color', False))
+        set_colors_enabled(self.appearance_colors)
+
+        # Screens and their stack are built with the window in _init_ui(); the
+        # attributes exist here so model-only construction (tests, `-p`) is
+        # complete without a TUI.
+        self.screens = {}
+        self.ss = None
+        self.spin = None
         self.dirty = True # re-scan devices and mounts before the next draw
         self.show_size = False # until we calc disk usage
 
@@ -280,92 +437,91 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         if self.win:
             self.win.stop_curses()
 
-    def _handle_key(self, key, spin, win):
-        """ Route one keypress and return the spinner's current value.
+    def appearance_choices(self):
+        """Every appearance the picker cycles, in order."""
+        return appearance_choices()
 
-        `key` is None when the prompt woke on its idle timeout (or a resize):
-        poll for hot-plugged devices instead of acting.  While an inline
-        confirmation is live every key belongs to it, so the action keys must
-        not fire underneath the prompt.
+    def appearance_label(self):
+        """The appearance the picker should show as current."""
+        return appearance_label(self.appearance_theme, self.appearance_colors)
+
+    def apply_appearance(self, name):
+        """Make *name* live; `mono` turns semantic colour off.
+
+        `mono` is not a library theme, so the installed palette stays at the
+        library default and the window merely records the name for the picker's
+        header -- exactly what vappman does with its own pseudo-theme.
         """
-        if self.confirm.active:
-            if key is not None:
-                self.handle_confirm_key(key)
-            return None
-        if key is None:
-            self._poll_device_changes()
-            return None
-        value = spin.do_key(key, win)
-        if key in (ord('u'), ) and not self.help_mode:
-            self._confirm_disk_usage()
+        mono = name == MONO_THEME
+        self.appearance_colors = not mono
+        # '' is the library default; keep the state canonical.
+        self.appearance_theme = '' if mono or name == 'default' else name
+        set_colors_enabled(not mono)
+        self.win.set_theme('default' if mono else name)
+        if mono:
+            self.win.theme = MONO_THEME
 
-        elif key in (ord('f'), ) and not self.help_mode:
-            # "freshen": rebuild devices, mounts and subvolume trees on the
-            # next loop iteration (refresh_info() runs right after the key).
-            self.dirty = True
+    def cycle_appearance(self):
+        """Advance the picker by one appearance (mono is the last entry)."""
+        choices = self.appearance_choices()
+        current = self.appearance_label()
+        idx = choices.index(current) if current in choices else -1
+        self.apply_appearance(choices[(idx + 1) % len(choices)])
 
-        elif key in (ord('r'), ) and not self.help_mode:
-            self._replace_eldest_snaps()
+    def _init_ui(self):
+        """Build the window, the screens and the action key bindings."""
+        win = self.win = ConsoleWindow(
+            opts=ConsoleWindowOpts(theme=self.appearance_theme or 'default'))
+        if not self.appearance_colors:
+            # 'mono' is not a library theme: record it for the picker's header
+            # while the installed palette stays at the library default.
+            win.theme = MONO_THEME
 
-        elif key in (ord('a'), ) and not self.help_mode:
-            self._replace_eldest_snaps(just_add=True)
+        self.screens = {
+            HOME_ST: HomeScreen(self),
+            HELP_ST: MySnapsHelpScreen(self),
+            THEMES_ST: MySnapsThemeScreen(self),
+        }
+        self.ss = ScreenStack(win, None, SCREENS, self.screens)
 
-        elif key in (ord('s'), ) and not self.help_mode:
-            self._create_snap()
+        spin = self.spin = OptionSpinner(stack=self.ss)
+        # Action keys are scoped by the screen that implements their
+        # *_ACTION method, so 's' does nothing while Help is showing.
+        spin.add_key('quit', 'x - quit program', genre='action', keys='x')
+        spin.add_key('help', '? - help screen', genre='action', keys='?')
+        spin.add_key('snap', 's - snapshot highlighted item',
+                     genre='action', keys='s')
+        spin.add_key('delete', 'd - delete highlighted item',
+                     genre='action', keys='d')
+        spin.add_key('replace', 'r - replace eldest snapshot of each subvol',
+                     genre='action', keys='r')
+        spin.add_key('add', 'a - add snapshot to each subvol with snapshots',
+                     genre='action', keys='a')
+        spin.add_key('usage', 'u - gather disk usage (slow; asks first)',
+                     genre='action', keys='u')
+        spin.add_key('freshen', 'f - freshen device and mount discovery',
+                     genre='action', keys='f')
+        spin.add_key('theme_screen', 'T - colour theme picker',
+                     genre='action', keys='T')
+        spin.add_key('spin_theme', 't - cycle theme',
+                     genre='action', keys='t')
+        spin.add_key('escape_help', 'ESC/ENTER - leave help', genre='action',
+                     keys=[27, cs.KEY_ENTER, 10], scope=HELP_ST)
+        spin.add_key('escape_theme', 'ESC - leave theme picker',
+                     genre='action', keys=27, scope=THEMES_ST)
+        win.set_handled_keys(spin)
 
-        elif key in (ord('d'), ) and not self.help_mode:
-            self._del_subvolume()
-
-        elif key in (ord('x'), ) and not self.help_mode:
-            self.stop_curses()
-            print('\n   OK, QUITTING NOW\n')
-            sys.exit(0)
-
-        elif key in (cs.KEY_ENTER, 10) and self.help_mode:
-            self.help_mode = False
-            win.set_pick_mode(False)
-
-        elif key == ord('n'):
-            win.alert(title='Info', message=f'got: {value}')
-
-        return value
-
-    def _start_window(self):
-        spin = OptionSpinner()
-        spin.add_key('help_mode', '? - toggle help screen', vals=[False, True], obj=self)
-
-        base_keys_we_handle=[cs.KEY_ENTER,
-                10, ord('s'), ord('d'), ord('u'), ord('f'), ord('r'), ord('a'),
-                ord('x')]
-
-        win = self.win = ConsoleWindow(opts=ConsoleWindowOpts(
-            keys=set(list(spin.keys) + list(base_keys_we_handle))))
-
-        for _ in range(100000000000):
-            if self.help_mode:
-                win.set_pick_mode(False)
-                spin.show_help_nav_keys(win)
-                spin.show_help_body(win)
-                self.win.add_body('Action keys:', attr=cs.A_UNDERLINE)
-                self.win.add_body(' d - delete highlighted item')
-                self.win.add_body(' s - create snapshot for highlighted item')
-                self.win.add_body(' r - replace eldest snapshot of each subvol')
-                self.win.add_body('     (on a labeled snapshot: that label only)')
-                self.win.add_body(' a - add snapshot to each subvol with snapshots')
-                self.win.add_body('     (on a labeled snapshot: that label only)')
-                self.win.add_body(' u - gather disk usage (slow; asks first)')
-                self.win.add_body(' f - freshen device and mount discovery')
-                self.win.add_body(' x - exit')
-            else:
-                win.set_pick_mode(True)
-                self.refresh_info()
+    def _main_loop(self):
+        """Draw the current screen, wait for a key, then dispatch it."""
+        win = self.win
+        while True:
+            self.screens[self.ss.curr.num].draw_screen()
             win.render()
             try:
                 # The idle timeout is our device poll: after this many seconds
                 # without a keystroke, look for a hot-plugged disk or a new
                 # mount instead of waiting for a restart.
-                _ = self._handle_key(
-                    win.prompt(seconds=self.IDLE_POLL_SECONDS), spin, win)
+                key = win.prompt(seconds=self.IDLE_POLL_SECONDS)
             # Any failure must still restore the terminal, so this catch is
             # deliberately broad.
             except Exception as exce:  # pylint: disable=broad-exception-caught
@@ -373,7 +529,18 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
                 print("exception:", str(exce))
                 print(traceback.format_exc())
                 sys.exit(15)
+            if key is None:
+                self._poll_device_changes()
+            elif self.confirm.active:
+                self.handle_confirm_key(key)
+            else:
+                self.spin.do_key(key, win)
+                self.ss.perform_actions(self.spin)
             win.clear()
+
+    def _start_window(self):
+        self._init_ui()
+        self._main_loop()
 
     ####################################################################
     # Inline (non-modal) confirmation / input
@@ -460,8 +627,13 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
         The label list of the "_all" operations lives on its own dim line so
         the prompt itself stays short.
+
+        The prompt text uses the DANGER role: these are the "are you really
+        sure?" questions, and the colour (or its bold+reverse mono fallback)
+        makes them impossible to mistake for ordinary output.
         """
-        lines = [(self._confirm_line(), cs.A_BOLD)]
+        lines = [(self._confirm_line(),
+                  cs.A_BOLD | semantic_attr(Theme.DANGER))]
         if self._confirm_labels:
             lines.append((f'     labels: {self._confirm_labels}', cs.A_DIM))
         return lines
@@ -1326,6 +1498,24 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         for text, attr in self._confirm_lines():
             win.add_body(text, attr=attr)
 
+    @staticmethod
+    def _row_attr(row):
+        """ Return the semantic colour role for one listing row, if any.
+
+        A snapshot keeps the terminal's own colours.  A `=Reverted` leftover
+        is SUCCESS because it marks a finished restore, but while something is
+        still mounted on it, it is an outstanding hazard and stays HOTSWAP.
+        Any other subvolume that is not mounted is WARNING: it is detached
+        from the tree and only holds disk space.  A mounted subvolume is
+        HOTSWAP, the live part of the system.
+        """
+        if row.subvol_ns.snap_of:
+            return None
+        if row.path.endswith(REVERTED_TAG):
+            return semantic_attr(
+                Theme.HOTSWAP if row.mount else Theme.SUCCESS)
+        return semantic_attr(Theme.HOTSWAP if row.mount else Theme.WARNING)
+
     def _add_row(self, win, row, widths, confirming):
         """ Add one rendered listing row to the window. """
         mounts_width, devs_width, path_width = widths
@@ -1340,11 +1530,14 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
             shown_path = '!!!' + shown_path[3:]
         mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
         size_str = f' {"-" if row.size is None else human(row.size):>7}'
+        # Colour is decoration: a subvolume that is not a snapshot keeps its
+        # "~" marker and its mount column, so the role only reinforces them.
+        attr = self._row_attr(row)
         win.add_body(
               f'{mount_str:>{mounts_width}}'
               f'{size_str if self.show_size else ""}'
               f' {row.dev:>{devs_width}}'
-              f' {shown_path:<{path_width}}')
+              f' {shown_path:<{path_width}}', attr=attr)
         if confirming and row.path == self.confirm.identity:
             self._add_confirm_lines(win)
 
@@ -1363,7 +1556,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         widths = (mounts_width, devs_width, path_width)
 
         win.add_fancy_header('MY-SNAPS  [s]:+snap [d]:-subvol [r]eplace-all'
-             + ' [a]dd-all [u]sage [f]reshen [x]:exit [?]:help',
+             + ' [a]dd-all [u]sage [f]reshen [T]heme [x]:exit [?]:help',
             mode='Underline')
         for dev_ns in self.devs.values():
             win.add_header(f'df: {dev_ns.diskfree}', attr=cs.A_DIM)
@@ -1416,6 +1609,12 @@ def parse_args(argv=None):
             help='install a periodic snapshot anacron job')
     parser.add_argument('--DB', action="store_true", dest='db',
             help='add some debugging output')
+    parser.add_argument('--theme', choices=appearance_choices(), default=None,
+            metavar='NAME',
+            help='starting colour theme; "mono" disables colour '
+                 '(T opens the picker in the TUI)')
+    parser.add_argument('--no-color', action='store_true', dest='no_color',
+            help='disable colour (the same as --theme mono)')
     opts = parser.parse_args(argv)
     if opts.cron:
         if not opts.label:

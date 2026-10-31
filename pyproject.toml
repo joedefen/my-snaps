@@ -78,7 +78,7 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
 py-version = "3.11"
 
 [tool.pylint.basic]
-# `MyUtils` and `InlineMenu` predate the package's snake_case renaming and are
-# imported by tests and downstream callers, so exempt only those two module
-# names instead of disabling `invalid-name` file by file.
-module-rgx = "^([a-z_][a-z0-9_]*|MyUtils|InlineMenu)$"
+# `MyUtils`, `InlineMenu` and `Appearance` predate (or mirror upstream)
+# CamelCase module naming and are imported by tests and downstream callers, so
+# exempt only those module names instead of disabling `invalid-name` per file.
+module-rgx = "^([a-z_][a-z0-9_]*|MyUtils|InlineMenu|Appearance)$"
