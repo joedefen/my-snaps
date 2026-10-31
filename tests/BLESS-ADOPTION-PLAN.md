@@ -1,9 +1,25 @@
 # Adopting `bless` in `my-snaps`
 
-**Status:** plan only. [`bless`](bless) is present and executable, copied
-verbatim, but the project does not yet satisfy its assumptions. Until the steps
-below are done, `./bless` refuses at start-up because
-[`my_snaps/__init__.py`](my_snaps/__init__.py) has no `__version__` line.
+**Status: implemented.** [`bless`](bless) is present, executable and copied
+verbatim; the project now satisfies its assumptions. `./bless` resolves the
+identity as `my-snaps 2.0.2` and gets as far as the clean-tree check, which only
+a commit can satisfy. The plan below is kept as the record of what was done.
+
+What changed, in the order the plan proposed it:
+
+| Item | Where |
+| --- | --- |
+| `__version__ = "2.0.2"` as the one version location; `dynamic = ["version"]` | [`my_snaps/__init__.py`](my_snaps/__init__.py), [`pyproject.toml`](pyproject.toml) |
+| Shared inspector, used by `bless` and CI | [`tests/inspect_dist.py`](tests/inspect_dist.py) |
+| `build>=1.2`, `twine>=7`, `packaging>=26` in the `dev` extra | [`pyproject.toml`](pyproject.toml) |
+| Gate artifacts and caches ignored | [`.gitignore`](.gitignore) |
+| Lint, test and packaging jobs; `main` and `dev` triggers | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| Developer documentation of both gates | [`README-DEV.md`](README-DEV.md) |
+| Regression tests for the gate, the inspector and repository hygiene | [`tests/test_bless.py`](tests/test_bless.py), [`tests/test_repo_hygiene.py`](tests/test_repo_hygiene.py) |
+| `dev` branch beside `main` | local and `origin` |
+
+Remaining before the first release: commit this work on `dev`, push it, then run
+`./bless` and answer `test` for a TestPyPI rehearsal.
 
 ## Source and scope
 

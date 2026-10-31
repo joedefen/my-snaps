@@ -6,7 +6,10 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "my-snaps"
-version = "2.0.1"
+# The release number lives in `my_snaps/__init__.py` (`__version__`). This
+# table only declares where it comes from, so `bless`, the built artifacts and
+# the runtime `--version` all report the same string.
+dynamic = ["version"]
 description = "Simple BTRFS Snapshot Tools"
 authors = [
     {name = "Joe Defen", email = "joedef@duck.com"},
@@ -30,11 +33,17 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+# `./bless` refuses to run unless `twine` and `packaging` meet its own floors
+# (`twine>=7`, `packaging>=26`); declaring the same floors here means the dev
+# extra always installs a toolchain the release gate accepts.
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pylint>=3.3",
     "ruff>=0.9",
+    "build>=1.2",
+    "twine>=7",
+    "packaging>=26",
 ]
 
 [project.urls]

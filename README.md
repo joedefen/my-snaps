@@ -151,6 +151,12 @@ python -m pylint my_snaps
 python -m pytest
 ```
 
+Releases go through [`./bless`](bless), which runs the lint, compile and test
+gates, builds and inspects the sdist and wheel, smoke-installs the wheel, and
+only then asks whether to rehearse on TestPyPI or publish. See
+[`README-DEV.md`](README-DEV.md) for the gate stages, the inspector's
+assertions, and the one place the version lives.
+
 ---
 
 ## Best Practices for Using this Simple Snapshot Strategy

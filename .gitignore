@@ -2,9 +2,15 @@ __pycache__/
 *.pyc
 .vscode/
 .venv/
+build/
 dist/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+*.whl
+*.tar.gz
