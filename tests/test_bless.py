@@ -1,15 +1,15 @@
-"""Regression tests for the release gate and the shared distribution inspector.
+"""Identity tests for this project's vendored release gate, and its inspector.
 
-`bless` is copied verbatim between projects, so these tests pin the one thing
-that is *not* copied -- the identity it derives from this tree -- plus the
-refusals a maintainer relies on, and the inspector assertions the gate and CI
-share.  Anything that would let a wrong artifact reach an index is worth a test.
+`bless` is emitted from `~/Projects/blessd/bless` and is never edited here. The
+gate's own policy -- the branch plan, the prompt, the index check, the build,
+the emitter -- is tested in `blessd`, once, where it is written. What is left
+for this project to answer is the identity the tree derives from its own
+`pyproject.toml` and the distribution inspector the release uploads behind.
 """
 
 import importlib.machinery
 import importlib.util
 import io
-import subprocess
 import sys
 import tarfile
 import tomllib
@@ -62,6 +62,8 @@ def test_the_identity_is_read_from_the_project_table(tmp_path):
     assert told['module'] == 'some_proj'
     assert told['console'] is None
     assert told['inspector'] == 'tests/inspect_dist.py'
+    # No `[tool.bless] branches` means the default branch model.
+    assert told['branches'] == ('main', 'dev')
 
 
 def test_the_tool_table_overrides_the_derivation(tmp_path):
@@ -101,139 +103,11 @@ def test_this_tree_derives_its_own_identity():
     assert bless.PROJECT['console'] in list(PROJECT['scripts'])
     assert bless.PROJECT['console'] == 'my-snaps'
     assert bless.PROJECT['inspector'] == 'tests/inspect_dist.py'
+    # This project has a development branch, so it keeps the default model.
+    assert bless.PROJECT['branches'] == ('main', 'dev')
     assert bless.PYPI_URL == f'https://pypi.org/pypi/{name}/json'
     assert bless.TESTPYPI_URL == f'https://test.pypi.org/pypi/{name}/json'
     assert bless.read_version() == VERSION
-
-
-# --- the index check: a published version is a refusal, before any build ---
-
-def test_a_published_version_is_refused_with_the_whole_release_list():
-    document = {'releases': {'2.0.1': [], '2.0.2': []}}
-
-    with pytest.raises(bless.BlessError) as caught:
-        bless.check_index('2.0.2', document)
-    message = str(caught.value)
-    assert 'my-snaps 2.0.2' in message
-    assert '2.0.1, 2.0.2' in message
-    assert 'my_snaps/__init__.py' in message
-
-
-def test_an_unpublished_version_is_accepted_and_sorted_numerically():
-    document = {'releases': {'2.0.10': [], '2.0.9': []}}
-
-    assert bless.check_index('2.0.11', document) == ['2.0.9', '2.0.10']
-
-
-def test_the_test_version_starts_at_99_0():
-    assert bless.next_test_version('2.0.2', {'releases': {}}) == '2.0.2.99.0'
-
-
-def test_the_test_version_is_one_past_the_highest_suffix():
-    document = {'releases': {'2.0.2.99.0': [], '2.0.2.99.4': [],
-                             '2.0.2.99.1': []}}
-
-    assert bless.next_test_version('2.0.2', document) == '2.0.2.99.5'
-
-
-def test_the_test_counter_belongs_to_its_own_base_version():
-    document = {'releases': {'2.0.1.99.7': []}}
-    assert bless.next_test_version('2.0.2', document) == '2.0.2.99.0'
-
-
-# --- the prompt: the only irreversible question is spelled out ------------
-
-def answer(monkeypatch, *replies):
-    prompts = []
-
-    def fake_input(prompt=''):
-        prompts.append(prompt)
-        try:
-            return replies[len(prompts) - 1]
-        except IndexError:
-            raise EOFError from None
-
-    monkeypatch.setattr('builtins.input', fake_input)
-    return prompts
-
-
-def test_a_stray_answer_is_asked_again_instead_of_deciding(monkeypatch, capsys):
-    answer(monkeypatch, 'pub', 'publish')
-
-    assert bless.ask_mode() == 'publish'
-    assert "'pub' is not test, publish or quit" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize('ending', ['', 'quit'])
-def test_an_empty_answer_or_quit_stops(monkeypatch, ending):
-    answer(monkeypatch, ending)
-    assert bless.ask_mode() == ''
-
-
-def test_ctrl_c_and_the_end_of_input_stop(monkeypatch):
-    def interrupted(prompt=''):
-        raise KeyboardInterrupt
-
-    def exhausted(prompt=''):
-        raise EOFError
-
-    monkeypatch.setattr('builtins.input', interrupted)
-    assert bless.ask_mode() == ''
-
-    monkeypatch.setattr('builtins.input', exhausted)
-    assert bless.ask_mode() == ''
-
-
-def test_bless_takes_no_arguments_and_says_where_the_choice_is(monkeypatch, capsys):
-    assert bless.main(['--nope']) == 1
-    printed = capsys.readouterr().err
-    assert '--nope' in printed
-    assert 'test or publish' in printed
-
-
-# --- the gate commands follow the derived package -------------------------
-
-def test_the_gate_compiles_and_covers_the_derived_package(monkeypatch):
-    commands = []
-
-    def fake_run(command, **kwargs):
-        commands.append([str(part) for part in command])
-        return subprocess.CompletedProcess(command, 0)
-
-    monkeypatch.setattr(bless, 'run', fake_run)
-    bless.gates()
-
-    compiling = next(argv for argv in commands if 'compileall' in argv)
-    assert bless.MODULE in compiling
-    testing = next(argv for argv in commands if 'pytest' in argv)
-    assert f'--cov={bless.MODULE}' in testing
-
-
-# --- the branch plan: main and dev must end on one commit -----------------
-
-def test_branch_plan_refuses_a_detached_head_and_a_third_branch():
-    assert 'detached HEAD' in bless.branch_plan(None, {}, lambda a, b: False)['refusal']
-    plan = bless.branch_plan('topic', {'main': 'a', 'dev': 'a'},
-                             lambda a, b: False)
-    assert 'topic' in plan['refusal']
-
-
-def test_branch_plan_refuses_diverged_branches():
-    tips = {'main': 'a', 'dev': 'b', 'origin/main': 'a', 'origin/dev': 'b'}
-
-    plan = bless.branch_plan('main', tips, lambda older, newer: False)
-    assert 'diverged' in plan['refusal']
-
-
-def test_branch_plan_fast_forwards_the_lagging_branch():
-    tips = {'main': 'a', 'dev': 'b', 'origin/main': 'a', 'origin/dev': 'b'}
-
-    def is_ancestor(older, newer):
-        # `a` is behind `b`; every commit is its own ancestor.
-        return older == 'a' or older == newer
-
-    plan = bless.branch_plan('dev', tips, is_ancestor)
-    assert plan == {'align': 'main'}
 
 
 # --- the shared inspector ------------------------------------------------

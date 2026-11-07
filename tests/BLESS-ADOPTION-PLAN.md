@@ -1,9 +1,13 @@
 # Adopting `bless` in `my-snaps`
 
-**Status: implemented.** [`bless`](bless) is present, executable and copied
-verbatim; the project now satisfies its assumptions. `./bless` resolves the
-identity as `my-snaps 2.0.2` and gets as far as the clean-tree check, which only
-a commit can satisfy. The plan below is kept as the record of what was done.
+**Status: implemented, then converted to the shared gate.** [`bless`](bless) is
+present, executable and now emitted from `~/Projects/blessd/bless` by that
+repository's `build.py` (sha256
+`3ef60e9e806ca58a3d900dd6622bb8be0052210da1ef26f9918bf0a1deb1e3b2`). The plan
+below is kept as the record of the original adoption; the conversion to the
+shared gate follows `~/Projects/blessd/docs/adopting.md` and trimmed the gate's
+policy tests from [`tests/test_bless.py`](tests/test_bless.py), which now pins
+only this project's identity and its inspector.
 
 What changed, in the order the plan proposed it:
 
@@ -23,14 +27,18 @@ Remaining before the first release: commit this work on `dev`, push it, then run
 
 ## Source and scope
 
-[`bless`](bless) was copied byte-for-byte from
-`../pwr-tray/bless` (SHA-256
-`4f756337840b0619fbf6f077b00d4bb3fb9aee95ff18bbeb6a0521d39d52131e`),
-which is also the current file in `../vappman` before the colour additions.
-The file is deliberately **not edited here**: reuse is "copy verbatim", and
+[`bless`](bless) is vendored from `~/Projects/blessd/bless`, emitted by that
+repository's `build.py`; the current copy's SHA-256 is
+`3ef60e9e806ca58a3d900dd6622bb8be0052210da1ef26f9918bf0a1deb1e3b2`. The file
+is deliberately **not edited here**: reuse is "re-emit from `blessd`", and
 project identity is read from [`pyproject.toml`](pyproject.toml) and
-[`my_snaps/__init__.py`](my_snaps/__init__.py). The later colour work will be
-adopted as a new upstream copy, not as local edits.
+[`my_snaps/__init__.py`](my_snaps/__init__.py). Reproduce the copy with:
+
+    python3 ~/Projects/blessd/build.py --into . --force
+
+`bt audit` reports the copy as `current`, `behind` or `stale`; a local edit
+would make it `stale`, so changes belong in `blessd` and reach this project by
+re-emitting.
 
 No `[tool.bless]` table is required once the defaults line up:
 
@@ -171,7 +179,9 @@ the other branch and tags the commit.
 ### 7. Add regression tests for the adoption
 
 Recommended before the first real release, because the current CI enforces an
-80% coverage floor and the gate is otherwise untested here:
+80% coverage floor and the gate is otherwise untested here. After the move to
+the shared gate this item is historical: the policy tests live in `blessd` and
+this project keeps only its identity and inspector tests.
 
 - Port the pure parts of `../pwr-tray/tests/test_bless.py`: identity derivation,
   preflight refusals, duplicate check before any build, exact
@@ -209,10 +219,9 @@ Recommended before the first real release, because the current CI enforces an
 
 ## Deferred
 
-- The colour additions to `bless` were made after the vappman copy; they will
-  be adopted by replacing this file with the updated upstream copy, not by
+- Later changes to the gate are adopted by re-emitting from `blessd`, never by
   editing [`bless`](bless) locally.
-- `bless` requires Python 3.11+ (`tomllib`); `my-snaps` also requires 3.11+, so
-  the vappman interpreter caveat does not apply here.
+- The shared gate tolerates Python 3.10 with `tomli`; `my-snaps` requires 3.11+,
+  so no extra dependency is needed here.
 - Coverage is already enforced by CI (`--cov-fail-under=80`); whether to mirror
   that floor in `[tool.coverage.report]` is independent of `bless`.
