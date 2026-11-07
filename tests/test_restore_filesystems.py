@@ -1,14 +1,14 @@
 """Regression tests for parsing `btrfs filesystem show` output.
 
 These tests are pure: no btrfs command, mount or root privilege is needed.
-They lock in that unlabelled filesystems keep an empty label instead of
+They lock in that unlabeled filesystems keep an empty label instead of
 raising `UnboundLocalError` or inheriting the previous filesystem's label.
 """
 from __future__ import annotations
 
 from my_snaps.my_restore import parse_filesystems
 
-# Realistic `btrfs filesystem show` output, two filesystems, first unlabelled.
+# Realistic `btrfs filesystem show` output, two filesystems, first unlabeled.
 TWO_FILESYSTEMS = """\
 Label: none  uuid: 8f60fc2f-872d-4327-aff9-34c4c4cefde7
 \tTotal devices 1 FS bytes used 15.00GiB
@@ -20,7 +20,7 @@ Label: 'btrfs-common'  uuid: 11111111-2222-3333-4444-555555555555
 """
 
 
-def test_unlabelled_filesystem_is_not_an_error():
+def test_unlabeled_filesystem_is_not_an_error():
     entries = parse_filesystems(TWO_FILESYSTEMS)
     assert [(e.label, e.path) for e in entries] == [
         ("", "/dev/nvme0n1p2"),
@@ -74,6 +74,6 @@ def test_empty_output_yields_no_entries():
     assert parse_filesystems("") == []
 
 
-def test_path_before_any_label_is_reported_unlabelled():
+def test_path_before_any_label_is_reported_unlabeled():
     output = "\tdevid 1 size 1.00GiB path /dev/sda1\n"
     assert parse_filesystems(output)[0].label == ""

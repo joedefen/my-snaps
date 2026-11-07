@@ -3,7 +3,7 @@
 Historically these operations used a modal `ConsoleWindow.answer()` dialog.
 They now use console_window's `InlineConfirmation` widget, so the prompts are
 drawn as ordinary body lines and keys are routed to `handle_confirm_key()`.
-The tests below assert the two behaviours that matter:
+The tests below assert the two behaviors that matter:
 
 * a destructive operation does nothing until the confirmation succeeds, and
 * ESC always cancels without touching BTRFS.

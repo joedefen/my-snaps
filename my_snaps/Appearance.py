@@ -1,85 +1,54 @@
 #!/usr/bin/env python3
-"""Semantic colour roles and the appearance preferences for my-snaps.
+"""Appearance preferences for my-snaps, on top of console-window's layer.
 
-Colour is decoration, never information.  Every role degrades to an attribute
-(or to plain text) when the terminal has no colour, so the subvolume/snapshot
-markers and the ``⚠️`` confirmations always remain readable on a monochrome
-terminal.
+console-window owns the semantic color roles: ``MONO_ROLES``, the
+process-wide color switch and :func:`semantic_attr` all live in
+:mod:`console_window.appearance`.  This module re-exports them under the names
+my-snaps has always used, so the draw code and the tests keep one import, and
+adds only what is genuinely application-specific:
 
-The role ids are ``console_window.Theme``'s semantic pairs rather than literal
-colour numbers.  console-window installs those pairs at startup and re-installs
-them whenever a theme is applied, so changing the active theme recolours the
-whole UI without an edit to any draw code.
-
-``mono`` is my-snaps' own no-colour pseudo-theme: console-window's
-``dark-mono``/``light-mono`` are still colour themes, so the true monochrome
-appearance lives here as the :data:`MONO_ROLES` mapping.  It is part of the
-picker's rotation but is not a library theme.
+* ``mono``, my-snaps' no-color pseudo-theme.  console-window's
+  ``dark-mono``/``light-mono`` are still color palettes, so the true
+  monochrome appearance is the role-to-attribute mapping the library installs
+  when color is off.  ``mono`` joins the picker's rotation as the final
+  choice and is not a library theme.
+* :func:`appearance_choices` / :func:`appearance_label`, the picker's
+  vocabulary.
+* :func:`resolve_ui_prefs`, the start-up decision, which normalizes ``mono``
+  and then defers to :func:`console_window.appearance.resolve_appearance`.
 """
 
-import curses
 import os
 
-from console_window import Theme
+from console_window import (
+    MONO_ROLES,
+    Theme,
+    colors_enabled,
+    resolve_appearance,
+    semantic_attr,
+    set_colors_enabled,
+)
 
-# my-snaps' pseudo-theme: no colour at all, only attributes.
+__all__ = [
+    'MONO_ROLES',
+    'MONO_THEME',
+    'appearance_choices',
+    'appearance_label',
+    'colors_enabled',
+    'resolve_ui_prefs',
+    'semantic_attr',
+    'set_colors_enabled',
+]
+
+# my-snaps' pseudo-theme: no color at all, only attributes.
 MONO_THEME = 'mono'
-
-# Role -> attribute used when colour is off.  The hierarchy is preserved with
-# emphasis instead of hue: destructive prompts are bold+reverse, informational
-# rows carry nothing (their markers already distinguish them).
-MONO_ROLES = {
-    Theme.DANGER: curses.A_BOLD | curses.A_REVERSE,
-    Theme.ERROR: curses.A_BOLD | curses.A_REVERSE,
-    Theme.WARNING: curses.A_BOLD,
-    Theme.SUCCESS: curses.A_BOLD,
-    Theme.EMPHASIS: curses.A_BOLD,
-    Theme.INFO: curses.A_NORMAL,
-    Theme.PROGRESS: curses.A_NORMAL,
-    Theme.OLD_SUCCESS: curses.A_NORMAL,
-    Theme.HOTSWAP: curses.A_NORMAL,
-}
-
-# Process-wide switch, seeded at startup by --no-color / NO_COLOR / mono.  One
-# terminal, so one decision.
-_COLORS_ENABLED = True
-
-
-def set_colors_enabled(enabled):
-    """Turn semantic colour on or off for the whole process."""
-    global _COLORS_ENABLED  # pylint: disable=global-statement
-    _COLORS_ENABLED = bool(enabled)
-
-
-def colors_enabled():
-    """True while semantic roles resolve to colour pairs rather than attributes."""
-    return _COLORS_ENABLED
-
-
-def semantic_attr(pair_id):
-    """Attribute for a console-window ``Theme`` role, or plain when no colour.
-
-    With colour off the role becomes an attribute from :data:`MONO_ROLES`, so
-    the UI keeps its emphasis hierarchy on a monochrome terminal.  Otherwise
-    both ``curses.has_colors()`` and ``curses.color_pair()`` can raise
-    ``curses.error`` before ``initscr()`` (and a failed lookup must never abort
-    a redraw), so any failure degrades to plain text.
-    """
-    if not _COLORS_ENABLED:
-        return MONO_ROLES.get(pair_id, curses.A_NORMAL)
-    try:
-        if not curses.has_colors():
-            return 0
-        return curses.color_pair(pair_id)
-    except curses.error:
-        return 0
 
 
 def appearance_choices():
     """Every appearance the picker cycles, in order.
 
     console-window's themes come first (in ``Theme.THEMES`` order), then
-    my-snaps' no-colour pseudo-theme, so one cycle always reaches ``mono``.
+    my-snaps' no-color pseudo-theme, so one cycle always reaches ``mono``.
     """
     return list(Theme.list_all()) + [MONO_THEME]
 
@@ -95,24 +64,25 @@ def resolve_ui_prefs(cli_theme=None, no_color=False, saved_theme='',
                      saved_colors=True, environ=None):
     """Starting ``(theme, colors)`` from the flag, the environment and the prefs.
 
-    Precedence, highest first: an explicit ``--theme`` / ``--no-color``, the
-    ``NO_COLOR`` convention (any non-empty value disables colour), then the
-    remembered choice.  An explicit ``--theme`` is a statement of intent, so it
-    re-enables colour even when the saved choice was ``mono`` (unless
-    ``--no-color`` says otherwise); an unknown theme name falls back to
-    console-window's ``default``.
+    ``mono`` is a my-snaps pseudo-theme, not a library palette, so it is
+    translated to the library's "no color" decision (``theme=''`` plus
+    ``colors=False``) before the rest is delegated to
+    :func:`console_window.appearance.resolve_appearance`.  That keeps one
+    precedence rule for the whole family: ``--no-color``, then an explicit
+    ``--theme``, then ``NO_COLOR``, then the remembered choice.
 
-    ``theme`` is ``''`` for the library default.  The special value ``mono``
-    forces ``colors`` off and is reported as ``theme=''``: there is no library
-    theme to install, because mono is the attribute mapping in this module.
+    The saved branch reports ``'default'`` rather than ``''`` when nothing was
+    remembered, because the picker's header shows a name, not an empty string.
     """
     env = os.environ if environ is None else environ
+    if cli_theme == MONO_THEME:
+        return '', False
     if cli_theme:
-        if cli_theme == MONO_THEME:
-            return '', False
-        return Theme.resolve(cli_theme), not no_color
-    theme = '' if saved_theme in (None, MONO_THEME) else Theme.resolve(saved_theme)
-    colors = bool(saved_colors) and saved_theme != MONO_THEME
-    if env.get('NO_COLOR') or no_color:
-        colors = False
-    return theme, colors
+        return resolve_appearance(cli_theme=cli_theme, no_color=no_color,
+                                  environ=env)
+    if saved_theme == MONO_THEME:
+        return '', False
+    theme, colors = resolve_appearance(
+        no_color=no_color, saved_theme=saved_theme,
+        saved_colors=saved_colors, environ=env)
+    return theme or 'default', colors

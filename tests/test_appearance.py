@@ -1,7 +1,7 @@
-"""Coverage for the semantic colour roles and the appearance preferences.
+"""Coverage for the semantic color roles and the appearance preferences.
 
 These are pure functions: no window, no terminal.  The monochrome mapping is
-the one that must stay legible when a terminal has no colour at all.
+the one that must stay legible when a terminal has no color at all.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 from console_window import Theme
 
 
-def test_semantic_attr_uses_mono_roles_when_colour_is_off():
+def test_semantic_attr_uses_mono_roles_when_color_is_off():
     appearance.set_colors_enabled(False)
     try:
         assert appearance.semantic_attr(Theme.DANGER) == (
@@ -23,7 +23,7 @@ def test_semantic_attr_uses_mono_roles_when_colour_is_off():
         appearance.set_colors_enabled(True)
 
 
-def test_semantic_attr_degrades_without_curses_colour():
+def test_semantic_attr_degrades_without_curses_color():
     appearance.set_colors_enabled(True)
     # Tests never call initscr(), so has_colors() is false; a role must never
     # raise and must degrade to plain text.
@@ -44,7 +44,7 @@ def test_appearance_choices_end_with_mono():
     assert choices[:-1] == Theme.list_all()
 
 
-def test_appearance_label_reports_mono_when_colour_is_off():
+def test_appearance_label_reports_mono_when_color_is_off():
     assert appearance.appearance_label('gruvbox', False) == appearance.MONO_THEME
     assert appearance.appearance_label('', True) == 'default'
     assert appearance.appearance_label('nord', True) == 'nord'

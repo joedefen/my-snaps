@@ -67,13 +67,13 @@ See the Quick Start. After install, run some tests per "Initial and Regression T
 * `?`: to get help on all keys and navigation
 * `q`: to quit the program (the header legend names the keys and omits the
   theme picker, which is described here and under `?`)
-* `T`: opens the colour-theme picker (`t` cycles, ESC returns). Colour is
+* `T`: opens the color-theme picker (`t` cycles, ESC returns). Color is
   decoration: mounted subvolume rows use the theme's HOTSWAP role,
   unmounted ones use WARNING, unmounted `=Reverted` leftovers use SUCCESS
   (a finished restore), and confirmation prompts use DANGER, while the `~`,
   `-->` and `!!!` markers keep the same meaning on a monochrome terminal.
   Start on a named theme with
-  `--theme NAME`, or disable colour with `--no-color` (`--theme mono`, or a
+  `--theme NAME`, or disable color with `--no-color` (`--theme mono`, or a
   non-empty `NO_COLOR` also work).
 
 **NOTE**: actions often require confirmation to ensure accidental keystrokes do not clobber your system. The listing itself is read-only; only snapshot or delete actions mount a filesystem writable.

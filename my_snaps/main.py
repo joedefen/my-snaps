@@ -8,7 +8,7 @@ NOTE: for basic debugging, pass --DB and it will dump major objects w/o
 starting the window.
 """
 # This module is the TUI plus its device/mount bookkeeping.  It is long because
-# those concerns share one live state machine; keep new behaviour in small
+# those concerns share one live state machine; keep new behavior in small
 # helpers instead of growing `_start_window()` or `refresh_info()`.
 #
 # `*_ACTION` is console-window's screen dispatch convention, and a Screen is a
@@ -37,6 +37,7 @@ from console_window import (
     ScreenStack,
     Theme,
 )
+from console_window import help as help_text
 
 from my_snaps.Appearance import (
     MONO_THEME,
@@ -49,7 +50,7 @@ from my_snaps.Appearance import (
 from my_snaps.MyUtils import ago_whence, human, reexec_as_root, timestamp_str, version_string
 
 # Screen numbers and names used by the ScreenStack.  HOME is the listing; HELP
-# explains the keys; THEMES is console-window's generic colour picker.
+# explains the keys; THEMES is console-window's generic color picker.
 HOME_ST, HELP_ST, THEMES_ST = 0, 1, 2
 SCREENS = ['HOME', 'HELP', 'THEMES']
 
@@ -103,7 +104,7 @@ class MySnapsScreen(Screen):
         self.app.ss.push(HELP_ST, self.win.pick_pos)
 
     def theme_screen_ACTION(self):
-        """ Open the colour-theme picker. """
+        """ Open the color-theme picker. """
         self.app.ss.push(THEMES_ST, self.win.pick_pos)
 
 
@@ -151,13 +152,25 @@ HELP_ACTION_LINES = (
     '     (on a labeled snapshot: that label only)',
     ' u - gather disk usage (slow; asks first)',
     ' f - freshen device and mount discovery',
-    ' T - colour theme picker (t cycles, ESC returns)',
     ' q - quit program',
 )
 
 
 class MySnapsHelpScreen(BasicHelpScreen):
-    """ console-window's help body plus the action-key legend. """
+    """ console-window's help body plus the action-key legend.
+
+    The theme picker is described through console-window's shared
+    ``theme_paragraph()`` (the same text the sample app uses), so the keys it
+    advertises cannot drift from the ones the spinner actually binds.
+    """
+
+    def extra_help_paragraphs(self):
+        return (
+            help_text.theme_paragraph(open_key='T', cycle_key='t'),
+            'The theme list ends with mono: it turns color off (the same mode '
+            '--no-color starts in) and leaves the palette selected, so the '
+            'picker shows how that theme degrades to bold/reverse attributes.',
+        )
 
     def draw_screen(self):
         super().draw_screen()
@@ -170,18 +183,24 @@ class MySnapsHelpScreen(BasicHelpScreen):
         self.app.ss.pop()
 
 
-# console-window draws the swatches and hint line; only the cycle is overridden
-# so my-snaps' `mono` pseudo-theme is part of the rotation and follows the
-# process-wide colour switch.
+# console-window draws the swatches and hint line.  The swatches already obey
+# the shared color switch, so `mono` previews the real no-color hierarchy.
+# The cycle is overridden because the library's own list holds palettes only;
+# my-snaps adds its `mono` pseudo-theme as the final rotation entry.
 _ThemePickerScreen = Theme.create_picker_screen(
     MySnapsScreen,
     cycle_key='t',
-    note='The last entry, mono, uses no colour at all.',
 )
 
 
 class MySnapsThemeScreen(_ThemePickerScreen):
     """ Theme picker over console-window's themes plus my-snaps' `mono`. """
+
+    def theme_label(self, theme_name):
+        """ Name the choice in effect, so `--no-color` reads as `mono`. """
+        if not self.app.appearance_colors:
+            return MONO_THEME
+        return super().theme_label(theme_name)
 
     def spin_theme_ACTION(self):
         """ `t` advances to the next appearance (mono included). """
@@ -250,7 +269,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
         # Appearance is resolved before the window exists so the first frame is
         # already on the chosen theme.  `--theme mono` (and --no-color/NO_COLOR)
-        # turns semantic colour into the attribute mapping in Appearance.py.
+        # turns semantic color into the attribute mapping in Appearance.py.
         self.appearance_theme, self.appearance_colors = resolve_ui_prefs(
             getattr(opts, 'theme', None), getattr(opts, 'no_color', False))
         set_colors_enabled(self.appearance_colors)
@@ -446,7 +465,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         return appearance_label(self.appearance_theme, self.appearance_colors)
 
     def apply_appearance(self, name):
-        """Make *name* live; `mono` turns semantic colour off.
+        """Make *name* live; `mono` turns semantic color off.
 
         `mono` is not a library theme, so the installed palette stays at the
         library default and the window merely records the name for the picker's
@@ -501,7 +520,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
                      genre='action', keys='u')
         spin.add_key('freshen', 'f - freshen device and mount discovery',
                      genre='action', keys='f')
-        spin.add_key('theme_screen', 'T - colour theme picker',
+        spin.add_key('theme_screen', 'T - color theme picker',
                      genre='action', keys='T')
         spin.add_key('spin_theme', 't - cycle theme',
                      genre='action', keys='t')
@@ -629,7 +648,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         the prompt itself stays short.
 
         The prompt text uses the DANGER role: these are the "are you really
-        sure?" questions, and the colour (or its bold+reverse mono fallback)
+        sure?" questions, and the color (or its bold+reverse mono fallback)
         makes them impossible to mistake for ordinary output.
         """
         lines = [(self._confirm_line(),
@@ -1043,7 +1062,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
         filesystem UUID.  Grouping the scan records by that UUID gives one
         `devs` entry per filesystem, so it is mounted, counted and listed
         once instead of once per member.  Devices without a UUID cannot be
-        grouped and keep the old per-device behaviour.
+        grouped and keep the old per-device behavior.
 
         `dev_ns.dev` stays the short name used in the device column and in
         the temporary mount directory: the first member's name for a
@@ -1500,9 +1519,9 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
 
     @staticmethod
     def _row_attr(row):
-        """ Return the semantic colour role for one listing row, if any.
+        """ Return the semantic color role for one listing row, if any.
 
-        A snapshot keeps the terminal's own colours.  A `=Reverted` leftover
+        A snapshot keeps the terminal's own colors.  A `=Reverted` leftover
         is SUCCESS because it marks a finished restore, but while something is
         still mounted on it, it is an outstanding hazard and stays HOTSWAP.
         Any other subvolume that is not mounted is WARNING: it is detached
@@ -1530,7 +1549,7 @@ class BTRFS:  # pylint: disable=too-many-instance-attributes
             shown_path = '!!!' + shown_path[3:]
         mount_str = row.mount if row.mount else '' if row.subvol_ns.snap_of else '~'
         size_str = f' {"-" if row.size is None else human(row.size):>7}'
-        # Colour is decoration: a subvolume that is not a snapshot keeps its
+        # Color is decoration: a subvolume that is not a snapshot keeps its
         # "~" marker and its mount column, so the role only reinforces them.
         attr = self._row_attr(row)
         win.add_body(
@@ -1611,10 +1630,10 @@ def parse_args(argv=None):
             help='add some debugging output')
     parser.add_argument('--theme', choices=appearance_choices(), default=None,
             metavar='NAME',
-            help='starting colour theme; "mono" disables colour '
+            help='starting color theme; "mono" disables color '
                  '(T opens the picker in the TUI)')
     parser.add_argument('--no-color', action='store_true', dest='no_color',
-            help='disable colour (the same as --theme mono)')
+            help='disable color (the same as --theme mono)')
     opts = parser.parse_args(argv)
     if opts.cron:
         if not opts.label:

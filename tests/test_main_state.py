@@ -490,7 +490,7 @@ def test_start_window_builds_the_ui_then_runs_the_loop(monkeypatch):
     assert calls == ['init', 'loop']
 
 
-def test_init_ui_records_mono_when_colour_is_off(monkeypatch):
+def test_init_ui_records_mono_when_color_is_off(monkeypatch):
     class Window(FakeWin):
         def __init__(self, opts=None):
             super().__init__()
@@ -509,7 +509,7 @@ def test_init_ui_records_mono_when_colour_is_off(monkeypatch):
     assert self.win.theme == main_module.MONO_THEME
 
 
-def test_apply_appearance_mono_turns_colour_off(monkeypatch):
+def test_apply_appearance_mono_turns_color_off(monkeypatch):
     class Window(FakeWin):
         def set_theme(self, name):
             self.theme = name
@@ -1262,7 +1262,7 @@ def test_parse_args_cron_defaults(cron, label, limit):
     assert opts.print is False
 
 
-def test_parse_args_honours_an_explicit_cron_label():
+def test_parse_args_honors_an_explicit_cron_label():
     opts = main_module.parse_args(['--cron', 'daily', '-L', 'Custom'])
     assert opts.label == 'Custom'
 

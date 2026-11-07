@@ -60,7 +60,7 @@ def same_device(left, right):
 def parse_filesystems(show_output):
     """ Parse `btrfs filesystem show` into label/path entries.
 
-    Unlabelled filesystems print `Label: none`; their label becomes '' so
+    Unlabeled filesystems print `Label: none`; their label becomes '' so
     every path stays paired with its own label instead of inheriting the
     previous filesystem's label.
     """
