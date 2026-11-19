@@ -1,0 +1,36 @@
+[build-system]
+requires = ["flit_core>=3.12,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "my-snaps"
+dynamic = ["version"]
+description = "Simple BTRFS Snapshot Tools"
+authors = [
+    {name = "Joe Defen", email = "joedef@duck.com"},
+]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "console-window~=3.1.0"
+]
+keywords = ["BTRFS", "snapshot", "restore", "balance", ]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux"
+]
+
+[project.optional-dependencies]
+[project.urls]
+"Homepage" = "https://github.com/joedefen/my-snaps"
+"Bug Tracker" = "https://github.com/joedefen/my-snaps/issues"
+
+[project.scripts]
+my-snaps = "my_snaps.main:run"
+my-restore = "my_snaps.my_restore:run"
+bt-smart-balance = "my_snaps.bt_smart_balance:run"
