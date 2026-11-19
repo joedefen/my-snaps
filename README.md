@@ -263,24 +263,6 @@ second balance when one is already running.
 
 ---
 
-## How it compares (as of 2026-10-24)
-
-| Tool | Snapshot model | Strengths | Cost / gap | Fit for this use case |
-|---|---|---|---|---|
-| **my-snaps** | label + replace-eldest, TUI, rename-based restore | Tiny, no daemon, transparent names, tailored `.efi-back` workaround, regression suite | Packaging/docs still unfinished, one maintainer | **Keep personal** |
-| **snapper** (+ snap-pac, grub-btrfs) | timeline, config retention, rollback | Mature, distro integration, boot-menu rollback (~1.2k stars) | Config/DBus/units, more moving parts | Best if you want point-and-click rollback |
-| **btrbk** | snapshot + send/receive + retention | Proven offsite backups, flexible retention (~2.2k stars) | Config-heavy, no TUI restore | Use for backups, not daily updates |
-| **btrfsmaintenance** | balance/scrub/trim jobs | Maintained, correct, systemd/cron integration (~1.1k stars) | Not a snapshot tool | Complement `bt-smart-balance` |
-| **Timeshift** | scheduled snapshots, GUI restore | Easy GUI, popular (~4.3k stars on the Mint fork) | Heavy, less CLI-friendly, less active | Use if you want a GUI |
-| **snap-pac** | pacman pre/post hooks | Automatic pre-update snapshots (~231 stars) | Arch-only, needs snapper | Complements my-snaps |
-| **yabsnap** | config-driven Arch snapshots | Simple, pacman hooks, close in spirit (~113 stars) | Config file, less interactive | Closest philosophical peer |
-| **grub-btrfs** | boot-menu snapshot entries | Rollback from the bootloader (~1.2k stars) | Requires snapper/snapshots | Add only if you want boot rollback |
-| **btrfs-assistant** | GUI for snapper/btrbk | Convenient install/rollback | Heavier GUI stack | Not needed for this workflow |
-
-The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-snaps`’ niche is “pre-update snapshot plus conservative manual restore.” It is not, and should not try to be, a retention-policy engine or a backup tool.
-
----
-
 ## Discriminating features
 
 1. **Clear mental model.** Labels (`=Update`, `=Daily`) plus “replace the eldest of the same label” describe the pre-update use case more directly than snapper’s timeline terminology. The naming is transparent and greppable.
@@ -288,4 +270,3 @@ The closest peers are **yabsnap** and **snap-pac**, not snapper or btrbk. `my-sn
 3. **Simple, reversible restore theory.** Rename the current subvolume to `=Reverted`, create a writable subvolume from the read-only snapshot, and reboot. This is easier to reason about than a bootloader-integrated rollback.
 4. **The `.efi-back` workaround is a real differentiator** for systemd-boot + pacman + dracut setups, documented under [Special Behavior for BTRFS + Systemd-boot + pacman + dracut](#special-behavior-for-btrfs--systemd-boot--pacman--dracut). Snapper, Timeshift, and btrbk do not solve that out of the box.
 5. **Two useful interaction modes.** A curses TUI for “before an update” and `-p`/`-s`/`--cron` for automation, with no config file.
-6. **The regression suite is real.** Tests run without a BTRFS filesystem, a mount, or root by substituting fake `btrfs`/`lsblk`/`rsync` executables, which keeps fixes cheap.
