@@ -6,4 +6,4 @@ The version lives here and nowhere else.
 and the built wheel is checked against it by ``tests/inspect_dist.py``.
 """
 
-__version__ = "2.1.2"
+__version__ = "2.1.3"
